@@ -56,7 +56,7 @@ promo-mailer/
 ## Access & Authentication
 
 ### Logging in (production)
-Visit `https://promo-mailer-wgqszg7kfq-uc.a.run.app` and click **Sign in with Google**. Only `@midnightecstasy.com` accounts are allowed in. Sessions last 8 hours.
+Visit `https://djpromo.net` and click **Sign in with Google**. Only `@midnightecstasy.com` accounts are allowed in. Sessions last 8 hours.
 
 ### Logging in (local dev)
 No login required locally — the app opens directly unless `GOOGLE_CLIENT_ID` is set as an env var.
@@ -106,7 +106,8 @@ Then redeploy.
 - **Project ID:** `elegant-cipher-497621-m4`
 - **Project number:** `626783271182`
 - **Organization ID:** `1097860000437`
-- **Cloud Run URL:** `https://promo-mailer-wgqszg7kfq-uc.a.run.app`
+- **Cloud Run URL:** `https://promo-mailer-626783271182.us-central1.run.app`
+- **Custom domain:** `https://djpromo.net`
 - **GCS bucket:** `your-label-promo-config`
 
 ### OAuth credentials
@@ -115,8 +116,10 @@ Created in **APIs & Services → Credentials** as a Web application OAuth client
 Authorized redirect URIs registered:
 - `http://localhost:5001/auth/callback` (Gmail send auth, local)
 - `http://localhost:5001/auth/login/callback` (Google login, local)
-- `https://promo-mailer-wgqszg7kfq-uc.a.run.app/auth/callback` (Gmail send auth, prod)
-- `https://promo-mailer-wgqszg7kfq-uc.a.run.app/auth/login/callback` (Google login, prod)
+- `https://djpromo.net/auth/callback` (Gmail send auth, prod)
+- `https://djpromo.net/auth/login/callback` (Google login, prod)
+- `https://promo-mailer-626783271182.us-central1.run.app/auth/callback` (Gmail send auth, direct Cloud Run URL)
+- `https://promo-mailer-626783271182.us-central1.run.app/auth/login/callback` (Google login, direct Cloud Run URL)
 
 ### Secret Manager secrets created
 ```bash
@@ -239,7 +242,7 @@ The codes CSV has fewer rows than the DJ list. Add more codes or reduce the DJ l
 Server wasn't restarted after a code change. Stop and restart `node server.js`.
 
 **Gmail auth fails after redeploy**
-Re-authorization is only needed if the Cloud Run URL changes or access is revoked. Tokens are stored in GCS and reused automatically on restart.
+Re-authorization is only needed if the domain/URL changes or access is revoked. Tokens are stored in GCS and reused automatically on restart.
 
 **`gcloud run deploy` permission error**
 Re-run the `gcloud projects add-iam-policy-binding` commands in the IAM section above.

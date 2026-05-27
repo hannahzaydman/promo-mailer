@@ -1,0 +1,786 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Promo Mailer</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0e0e0e;
+      --surface: #1a1a1a;
+      --surface2: #222;
+      --border: #2e2e2e;
+      --accent: #c8f135;
+      --accent-dim: #9bb82a;
+      --text: #f0f0f0;
+      --muted: #888;
+      --danger: #ff5c5c;
+      --success: #4caf82;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Helvetica Neue', Arial, sans-serif;
+      min-height: 100vh;
+      padding: 40px 20px 80px;
+    }
+
+    header { text-align: center; margin-bottom: 48px; }
+    header h1 {
+      font-size: 1.6rem; font-weight: 700;
+      letter-spacing: 0.12em; text-transform: uppercase; color: var(--accent);
+    }
+    header p { color: var(--muted); margin-top: 6px; font-size: 0.85rem; letter-spacing: 0.04em; }
+
+    .steps { display: flex; justify-content: center; margin-bottom: 40px; }
+    .step-tab {
+      padding: 10px 24px; font-size: 0.75rem; letter-spacing: 0.1em;
+      text-transform: uppercase; color: var(--muted);
+      border-bottom: 2px solid var(--border); transition: color 0.2s, border-color 0.2s;
+    }
+    .step-tab.active  { color: var(--accent); border-bottom-color: var(--accent); }
+    .step-tab.done    { color: var(--accent-dim); border-bottom-color: var(--accent-dim); }
+
+    .card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: 8px; padding: 28px 32px;
+      max-width: 700px; margin: 0 auto 24px;
+    }
+    .card h2 {
+      font-size: 0.9rem; letter-spacing: 0.1em;
+      text-transform: uppercase; color: var(--accent); margin-bottom: 20px;
+    }
+
+    .field { margin-bottom: 18px; }
+    label {
+      display: block; font-size: 0.78rem; letter-spacing: 0.06em;
+      text-transform: uppercase; color: var(--muted); margin-bottom: 7px;
+    }
+    input[type="text"], input[type="email"], input[type="password"], select, textarea {
+      width: 100%; background: var(--bg); border: 1px solid var(--border);
+      border-radius: 5px; color: var(--text); font-size: 0.92rem;
+      padding: 10px 12px; outline: none; transition: border-color 0.2s; font-family: inherit;
+    }
+    input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+    select option { background: var(--surface); }
+    textarea { resize: vertical; min-height: 130px; line-height: 1.5; }
+
+    .file-upload { position: relative; }
+    .file-upload input[type="file"] {
+      position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%;
+    }
+    .file-upload-label {
+      display: flex; align-items: center; gap: 10px;
+      background: var(--bg); border: 1px dashed var(--border);
+      border-radius: 5px; padding: 12px 14px; cursor: pointer;
+      transition: border-color 0.2s; font-size: 0.88rem; color: var(--muted);
+    }
+    .file-upload:hover .file-upload-label { border-color: var(--accent); color: var(--text); }
+    .filename { color: var(--accent); font-size: 0.85rem; }
+
+    .col-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .hint { font-size: 0.75rem; color: var(--muted); margin-top: 6px; line-height: 1.4; }
+    .hint code {
+      background: #252525; padding: 1px 5px; border-radius: 3px;
+      color: var(--accent); font-size: 0.8rem;
+    }
+
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: var(--accent); color: #0e0e0e; font-weight: 700;
+      font-size: 0.8rem; letter-spacing: 0.1em; text-transform: uppercase;
+      border: none; border-radius: 5px; padding: 11px 22px;
+      cursor: pointer; transition: background 0.2s, opacity 0.2s;
+    }
+    .btn:hover { background: #d9ff4a; }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-secondary {
+      background: transparent; color: var(--muted); border: 1px solid var(--border);
+    }
+    .btn-secondary:hover { background: transparent; color: var(--text); border-color: var(--text); }
+    .btn-ghost {
+      background: transparent; color: var(--accent);
+      border: 1px dashed rgba(200,241,53,0.4); font-size: 0.78rem;
+    }
+    .btn-ghost:hover { background: rgba(200,241,53,0.06); border-color: var(--accent); }
+    .btn-remove {
+      background: transparent; color: var(--muted);
+      border: 1px solid var(--border); padding: 6px 12px;
+      font-size: 0.72rem; border-radius: 4px; cursor: pointer;
+      letter-spacing: 0.08em; text-transform: uppercase; transition: color 0.2s, border-color 0.2s;
+    }
+    .btn-remove:hover { color: var(--danger); border-color: var(--danger); }
+
+    .actions { display: flex; gap: 10px; margin-top: 24px; align-items: center; }
+
+    .error-banner {
+      background: rgba(255,92,92,0.12); border: 1px solid var(--danger);
+      color: var(--danger); border-radius: 5px; padding: 10px 14px;
+      font-size: 0.85rem; margin-bottom: 16px; display: none;
+    }
+
+    /* Release cards */
+    .release-card-inner {
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 7px; padding: 20px 22px;
+    }
+    .release-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 16px;
+    }
+    .release-number {
+      font-size: 0.7rem; letter-spacing: 0.1em; text-transform: uppercase;
+      color: var(--accent); font-weight: 700; white-space: nowrap;
+    }
+    .release-name-input {
+      background: transparent !important; border: none !important;
+      border-bottom: 1px solid var(--border) !important;
+      border-radius: 0 !important; padding: 4px 0 !important;
+      font-size: 1rem !important; font-weight: 600 !important;
+      color: var(--text) !important; flex: 1; margin: 0 12px;
+    }
+    .release-name-input:focus { border-bottom-color: var(--accent) !important; outline: none !important; }
+
+    .add-release-wrap {
+      max-width: 700px; margin: 0 auto 8px; display: flex; justify-content: center;
+    }
+
+    /* Preview */
+    .release-section { margin-bottom: 16px; }
+    .release-section-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 14px; background: rgba(200,241,53,0.06);
+      border: 1px solid rgba(200,241,53,0.2); border-radius: 6px;
+      margin-bottom: 8px; cursor: pointer; user-select: none;
+    }
+    .rs-name { font-size: 0.82rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent); }
+    .rs-count { font-size: 0.78rem; color: var(--muted); }
+    .rs-toggle { font-size: 0.75rem; color: var(--muted); }
+    .release-emails { display: flex; flex-direction: column; gap: 8px; }
+    .release-emails.collapsed { display: none; }
+
+    .preview-wrap { max-height: 460px; overflow-y: auto; padding-right: 4px; }
+    .preview-wrap::-webkit-scrollbar { width: 5px; }
+    .preview-wrap::-webkit-scrollbar-track { background: transparent; }
+    .preview-wrap::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    .email-card {
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: 6px; padding: 12px 14px; font-size: 0.84rem;
+    }
+    .email-card .ec-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 7px; }
+    .ec-name { font-weight: 600; color: var(--text); }
+    .ec-email { font-size: 0.78rem; color: var(--muted); margin-top: 2px; }
+    .ec-code {
+      font-size: 0.75rem; background: rgba(200,241,53,0.1); color: var(--accent);
+      border: 1px solid rgba(200,241,53,0.25); border-radius: 4px; padding: 3px 8px; white-space: nowrap;
+    }
+    .ec-subject { font-size: 0.8rem; color: var(--muted); margin-bottom: 5px; }
+    .ec-body {
+      color: #bbb; line-height: 1.5; white-space: pre-wrap;
+      font-size: 0.82rem; max-height: 72px; overflow: hidden;
+    }
+    .ec-body.expanded { max-height: none; }
+    .expand-btn {
+      background: none; border: none; color: var(--accent);
+      font-size: 0.74rem; cursor: pointer; padding: 3px 0 0; letter-spacing: 0.04em;
+    }
+
+    .gmail-note {
+      background: rgba(200,241,53,0.06); border: 1px solid rgba(200,241,53,0.2);
+      border-radius: 5px; padding: 10px 14px; font-size: 0.78rem;
+      color: #b5d940; line-height: 1.5; margin-bottom: 20px;
+    }
+
+    .preview-meta { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+    .count { font-size: 0.8rem; color: var(--muted); }
+
+    .send-progress { display: none; margin-top: 20px; }
+    .progress-bar-wrap { background: var(--border); border-radius: 4px; height: 6px; margin: 10px 0; overflow: hidden; }
+    .progress-bar { height: 100%; background: var(--accent); border-radius: 4px; transition: width 0.3s; width: 0%; }
+
+    .send-results { display: none; margin-top: 20px; }
+    .result-row {
+      display: flex; align-items: center; gap: 8px; font-size: 0.82rem;
+      padding: 5px 0; border-bottom: 1px solid var(--border);
+    }
+    .result-row:last-child { border-bottom: none; }
+    .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+    .dot-success { background: var(--success); }
+    .dot-fail { background: var(--danger); }
+
+    .setup-details {
+      border: 1px solid var(--border); border-radius: 5px;
+      padding: 0; overflow: hidden;
+    }
+    .setup-details summary {
+      padding: 10px 14px; cursor: pointer; font-size: 0.78rem;
+      letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted);
+      user-select: none; list-style: none;
+    }
+    .setup-details summary::-webkit-details-marker { display: none; }
+    .setup-details[open] summary { color: var(--accent); border-bottom: 1px solid var(--border); }
+    .setup-steps {
+      padding: 14px 18px 14px 32px; font-size: 0.82rem; line-height: 2;
+      color: #bbb; margin: 0;
+    }
+    .setup-steps code {
+      background: #252525; padding: 1px 6px; border-radius: 3px;
+      color: var(--accent); font-size: 0.8rem;
+    }
+    .auth-status { font-size: 0.82rem; }
+    .auth-status.authorized { color: var(--success); }
+    .auth-status.unauthorized { color: var(--muted); }
+
+    .hidden { display: none !important; }
+    #step1, #step2, #step3 { display: none; }
+    #step1.active, #step2.active, #step3.active { display: block; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Promo Mailer</h1>
+  <p>Upload · Compose · Send</p>
+</header>
+
+<div class="steps">
+  <div class="step-tab active" id="tab1">1 — DJ List</div>
+  <div class="step-tab" id="tab2">2 — Releases</div>
+  <div class="step-tab" id="tab3">3 — Preview & Send</div>
+</div>
+
+<!-- STEP 1 -->
+<div id="step1" class="active">
+  <div class="card">
+    <h2>Upload DJ List</h2>
+    <div id="step1-error" class="error-banner"></div>
+
+    <div class="field">
+      <label>DJ List (.xlsx or .csv)</label>
+      <div class="file-upload">
+        <input type="file" id="dj-file" accept=".xlsx,.csv" />
+        <div class="file-upload-label">
+          <span>&#8593; Choose file</span>
+          <span class="filename" id="dj-filename">No file chosen</span>
+        </div>
+      </div>
+    </div>
+
+    <div id="col-selectors" class="hidden">
+      <div class="col-row">
+        <div class="field">
+          <label>Name Column</label>
+          <select id="name-col"></select>
+        </div>
+        <div class="field">
+          <label>Email Column</label>
+          <select id="email-col"></select>
+        </div>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button class="btn" id="step1-next" disabled>Next &rarr;</button>
+    </div>
+  </div>
+</div>
+
+<!-- STEP 2 -->
+<div id="step2">
+  <div class="card">
+    <h2>Releases</h2>
+    <p class="hint" style="margin-bottom:20px">
+      Add one entry per release. Each gets its own codes spreadsheet and email template.<br>
+      Use <code>{name}</code> and <code>{code}</code> as placeholders in the subject and body.
+    </p>
+    <div id="step2-error" class="error-banner"></div>
+  </div>
+
+  <div id="releases-container"></div>
+
+  <div class="add-release-wrap">
+    <button class="btn btn-ghost" id="add-release-btn">+ Add Release</button>
+  </div>
+
+  <div class="card" style="margin-top:10px">
+    <div class="actions" style="margin-top:0">
+      <button class="btn btn-secondary" id="step2-back">&larr; Back</button>
+      <button class="btn" id="step2-next">Preview &rarr;</button>
+    </div>
+  </div>
+</div>
+
+<!-- STEP 3 -->
+<div id="step3">
+  <div class="card">
+    <h2>Gmail Authorization</h2>
+
+    <details class="setup-details">
+      <summary>Setup instructions (one-time)</summary>
+      <ol class="setup-steps">
+        <li>Go to <strong>console.cloud.google.com</strong> and create a new project (or select an existing one).</li>
+        <li>Search for <strong>Gmail API</strong> and enable it.</li>
+        <li>Go to <strong>APIs &amp; Services &rarr; OAuth consent screen</strong>.<br>
+            Set User Type to <strong>Internal</strong> (Google Workspace — no verification required).</li>
+        <li>Go to <strong>Credentials &rarr; Create Credentials &rarr; OAuth client ID</strong>.<br>
+            Application type: <strong>Web application</strong>.<br>
+            Under <em>Authorized redirect URIs</em>, add: <code>http://localhost:5001/auth/callback</code></li>
+        <li>Copy your <strong>Client ID</strong> and <strong>Client Secret</strong> into the fields below.</li>
+      </ol>
+    </details>
+
+    <div class="col-row" style="margin-top:18px">
+      <div class="field">
+        <label>Client ID</label>
+        <input type="text" id="client-id" placeholder="xxxx.apps.googleusercontent.com" />
+      </div>
+      <div class="field">
+        <label>Client Secret</label>
+        <input type="password" id="client-secret" placeholder="GOCSPX-..." />
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Your Gmail Address</label>
+      <input type="email" id="gmail-user" placeholder="you@yourworkspace.com" />
+    </div>
+
+    <div style="display:flex;align-items:center;gap:14px;margin-top:4px">
+      <button class="btn" id="auth-btn">Authorize with Google</button>
+      <span id="auth-status" class="auth-status"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Email Preview</h2>
+    <div id="step3-error" class="error-banner"></div>
+
+    <div class="preview-meta">
+      <span class="count" id="preview-count"></span>
+      <button class="btn btn-secondary" id="step3-back">&larr; Back</button>
+    </div>
+
+    <div class="preview-wrap">
+      <div id="preview-releases"></div>
+    </div>
+
+    <div class="send-progress" id="send-progress">
+      <div style="font-size:0.8rem;color:var(--muted)" id="send-status">Sending...</div>
+      <div class="progress-bar-wrap"><div class="progress-bar" id="progress-bar"></div></div>
+    </div>
+
+    <div class="send-results" id="send-results">
+      <div style="display:flex;gap:16px;margin-bottom:12px">
+        <span style="color:var(--success);font-size:0.85rem" id="result-sent-count"></span>
+        <span style="color:var(--danger);font-size:0.85rem" id="result-fail-count"></span>
+      </div>
+      <div id="result-list" style="max-height:200px;overflow-y:auto"></div>
+    </div>
+
+    <div class="actions">
+      <button class="btn" id="send-btn">Send All Emails</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  let djFile = null;
+  let releases = [];       // { id, file, columns }
+  let releaseIdCounter = 0;
+  let allEmailsToSend = [];
+
+  // ── Step 1 ────────────────────────────────────────────────────────────────
+  document.getElementById('dj-file').addEventListener('change', async (e) => {
+    djFile = e.target.files[0];
+    document.getElementById('dj-filename').textContent = djFile ? djFile.name : 'No file chosen';
+    if (!djFile) return;
+    const fd = new FormData();
+    fd.append('dj_file', djFile);
+    try {
+      const res = await fetch('/get-columns', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (data.error) { showError('step1-error', data.error); return; }
+      populateSelect('name-col', data.columns, autoGuess(data.columns, ['name','artist','dj','first']));
+      populateSelect('email-col', data.columns, autoGuess(data.columns, ['email','e-mail','mail']));
+      document.getElementById('col-selectors').classList.remove('hidden');
+      document.getElementById('step1-next').disabled = false;
+    } catch(e) { showError('step1-error', 'Could not read file.'); }
+  });
+
+  // ── Step 2: Release management ────────────────────────────────────────────
+  function createRelease() {
+    const id = releaseIdCounter++;
+    releases.push({ id, file: null, columns: [] });
+    const container = document.getElementById('releases-container');
+    const n = releases.length;
+
+    const wrap = document.createElement('div');
+    wrap.className = 'card';
+    wrap.id = `release-card-${id}`;
+    wrap.style.marginBottom = '14px';
+    wrap.innerHTML = `
+      <div class="release-card-inner">
+        <div class="release-header">
+          <span class="release-number">Release ${n}</span>
+          <input type="text" class="release-name-input" id="release-name-${id}"
+            placeholder="e.g. Artist – Title" />
+          <button class="btn-remove" id="remove-btn-${id}" onclick="removeRelease(${id})">Remove</button>
+        </div>
+        <div class="field">
+          <label>Download Codes (.csv)</label>
+          <div class="file-upload">
+            <input type="file" accept=".csv" onchange="handleCodesFile(event,${id})" />
+            <div class="file-upload-label">
+              <span>&#8593; Choose file</span>
+              <span class="filename" id="codes-filename-${id}">No file chosen</span>
+            </div>
+          </div>
+        </div>
+        <div class="field hidden" id="codes-col-wrap-${id}">
+          <label>Code Column</label>
+          <select id="codes-col-${id}"></select>
+        </div>
+        <div class="field">
+          <label>Subject Line</label>
+          <input type="text" id="subject-${id}" placeholder="New promo for {name}" />
+        </div>
+        <div class="field">
+          <label>Email Body</label>
+          <textarea id="body-${id}" placeholder="Hi {name},&#10;&#10;Here's your download code: {code}&#10;&#10;Enjoy!"></textarea>
+        </div>
+      </div>
+    `;
+    container.appendChild(wrap);
+    syncRemoveButtons();
+  }
+
+  function removeRelease(id) {
+    releases = releases.filter(r => r.id !== id);
+    document.getElementById(`release-card-${id}`)?.remove();
+    // Renumber visible labels
+    document.querySelectorAll('.release-number').forEach((el, i) => {
+      el.textContent = `Release ${i + 1}`;
+    });
+    syncRemoveButtons();
+  }
+
+  function syncRemoveButtons() {
+    releases.forEach(r => {
+      const btn = document.getElementById(`remove-btn-${r.id}`);
+      if (btn) btn.style.display = releases.length > 1 ? '' : 'none';
+    });
+  }
+
+  async function handleCodesFile(e, id) {
+    const file = e.target.files[0];
+    if (!file) return;
+    releases.find(r => r.id === id).file = file;
+    document.getElementById(`codes-filename-${id}`).textContent = file.name;
+    const fd = new FormData();
+    fd.append('dj_file', file);
+    try {
+      const res = await fetch('/get-columns', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (data.error) return;
+      populateSelect(`codes-col-${id}`, data.columns, autoGuess(data.columns, ['code','download','redemption','bandcamp']));
+      document.getElementById(`codes-col-wrap-${id}`).classList.remove('hidden');
+    } catch(e) {}
+  }
+
+  document.getElementById('add-release-btn').addEventListener('click', createRelease);
+
+  // ── Navigation ────────────────────────────────────────────────────────────
+  document.getElementById('step1-next').addEventListener('click', () => {
+    if (releases.length === 0) createRelease();
+    goTo(2);
+  });
+  document.getElementById('step2-back').addEventListener('click', () => goTo(1));
+  document.getElementById('step3-back').addEventListener('click', () => goTo(2));
+  document.getElementById('step2-next').addEventListener('click', generatePreview);
+
+  function goTo(n) {
+    [1,2,3].forEach(i => {
+      document.getElementById(`step${i}`).classList.toggle('active', i === n);
+      const tab = document.getElementById(`tab${i}`);
+      tab.classList.toggle('active', i === n);
+      tab.classList.toggle('done', i < n);
+    });
+    ['step1-error','step2-error','step3-error'].forEach(clearError);
+  }
+
+  // ── Preview ───────────────────────────────────────────────────────────────
+  async function generatePreview() {
+    clearError('step2-error');
+
+    for (let i = 0; i < releases.length; i++) {
+      const r = releases[i];
+      const subject = document.getElementById(`subject-${r.id}`)?.value.trim();
+      const body    = document.getElementById(`body-${r.id}`)?.value.trim();
+      if (!r.file)   return showError('step2-error', `Release ${i+1}: upload a codes file.`);
+      if (!subject)  return showError('step2-error', `Release ${i+1}: subject line is empty.`);
+      if (!body)     return showError('step2-error', `Release ${i+1}: email body is empty.`);
+    }
+
+    const fd = new FormData();
+    fd.append('dj_file', djFile);
+    fd.append('name_col', document.getElementById('name-col').value);
+    fd.append('email_col', document.getElementById('email-col').value);
+    fd.append('release_count', releases.length);
+
+    releases.forEach((r, i) => {
+      fd.append(`codes_file_${i}`, r.file);
+      fd.append(`codes_col_${i}`, document.getElementById(`codes-col-${r.id}`).value);
+      fd.append(`subject_${i}`,   document.getElementById(`subject-${r.id}`).value);
+      fd.append(`body_${i}`,      document.getElementById(`body-${r.id}`).value);
+      const name = document.getElementById(`release-name-${r.id}`).value.trim();
+      fd.append(`release_name_${i}`, name || `Release ${i+1}`);
+    });
+
+    const btn = document.getElementById('step2-next');
+    btn.disabled = true; btn.textContent = 'Loading…';
+
+    try {
+      const res = await fetch('/preview', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (data.error) { showError('step2-error', data.error); return; }
+      allEmailsToSend = data.allEmails;
+      renderPreview(data.releases, data.total);
+      goTo(3);
+    } catch(e) {
+      showError('step2-error', `Preview failed: ${e.message}`);
+    } finally {
+      btn.disabled = false; btn.textContent = 'Preview →';
+    }
+  }
+
+  function renderPreview(releaseGroups, total) {
+    document.getElementById('preview-count').textContent =
+      `${total} email${total !== 1 ? 's' : ''} across ${releaseGroups.length} release${releaseGroups.length !== 1 ? 's' : ''}`;
+
+    const container = document.getElementById('preview-releases');
+    container.innerHTML = '';
+
+    releaseGroups.forEach((release, ri) => {
+      const section = document.createElement('div');
+      section.className = 'release-section';
+
+      const header = document.createElement('div');
+      header.className = 'release-section-header';
+      header.innerHTML = `
+        <span class="rs-name">${esc(release.name)}</span>
+        <span class="rs-count">${release.count} recipient${release.count !== 1 ? 's' : ''}</span>
+        <span class="rs-toggle">&#9660;</span>
+      `;
+
+      const emailList = document.createElement('div');
+      emailList.className = 'release-emails';
+
+      header.addEventListener('click', () => {
+        emailList.classList.toggle('collapsed');
+        header.querySelector('.rs-toggle').textContent =
+          emailList.classList.contains('collapsed') ? '▶' : '▼';
+      });
+
+      release.emails.forEach((e, ei) => {
+        const uid = `e${ri}-${ei}`;
+        const card = document.createElement('div');
+        card.className = 'email-card';
+        card.innerHTML = `
+          <div class="ec-header">
+            <div>
+              <div class="ec-name">${esc(e.name)}</div>
+              <div class="ec-email">${esc(e.email)}</div>
+            </div>
+            <span class="ec-code">${esc(e.code)}</span>
+          </div>
+          <div class="ec-subject">Subject: ${esc(e.subject)}</div>
+          <div class="ec-body" id="${uid}">${esc(e.body)}</div>
+          <button class="expand-btn" onclick="toggleBody('${uid}',this)">Show more</button>
+        `;
+        emailList.appendChild(card);
+      });
+
+      section.appendChild(header);
+      section.appendChild(emailList);
+      container.appendChild(section);
+    });
+  }
+
+  function toggleBody(uid, btn) {
+    const el = document.getElementById(uid);
+    el.classList.toggle('expanded');
+    btn.textContent = el.classList.contains('expanded') ? 'Show less' : 'Show more';
+  }
+
+  // ── OAuth ─────────────────────────────────────────────────────────────────
+  async function checkAuthStatus() {
+    const res  = await fetch('/auth/status');
+    const data = await res.json();
+    const el   = document.getElementById('auth-status');
+    if (data.authorized) {
+      el.textContent = '✓ Authorized';
+      el.className   = 'auth-status authorized';
+    } else {
+      el.textContent = 'Not authorized';
+      el.className   = 'auth-status unauthorized';
+    }
+    return data.authorized;
+  }
+
+  document.getElementById('auth-btn').addEventListener('click', async () => {
+    const clientId     = document.getElementById('client-id').value.trim();
+    const clientSecret = document.getElementById('client-secret').value.trim();
+    if (!clientId || !clientSecret)
+      return showError('step3-error', 'Enter your Client ID and Client Secret first.');
+
+    const res  = await fetch('/auth/setup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ client_id: clientId, client_secret: clientSecret }),
+    });
+    const data = await res.json();
+    if (data.error) return showError('step3-error', data.error);
+
+    const popup = window.open(data.authUrl, 'gmail-auth', 'width=500,height=640');
+
+    // Listen for the postMessage from the callback page
+    window.addEventListener('message', async (e) => {
+      if (e.data === 'gmail-authorized') {
+        popup?.close();
+        await checkAuthStatus();
+      }
+    }, { once: true });
+
+    // Also poll in case postMessage is blocked
+    const poll = setInterval(async () => {
+      if (popup?.closed) {
+        clearInterval(poll);
+        await checkAuthStatus();
+      }
+    }, 1000);
+  });
+
+  // Load saved credentials on page load
+  (async () => {
+    try {
+      const res  = await fetch('/auth/config');
+      const data = await res.json();
+      if (data.clientId)     document.getElementById('client-id').value     = data.clientId;
+      if (data.clientSecret) document.getElementById('client-secret').value = data.clientSecret;
+      if (data.authorized) {
+        const el = document.getElementById('auth-status');
+        el.textContent = '✓ Authorized';
+        el.className   = 'auth-status authorized';
+      }
+    } catch (_) {}
+  })();
+
+  // Check auth status when arriving on step 3
+  const _origGoTo = goTo;
+  goTo = function(n) {
+    _origGoTo(n);
+    if (n === 3) checkAuthStatus();
+  };
+
+  // ── Send ──────────────────────────────────────────────────────────────────
+  document.getElementById('send-btn').addEventListener('click', async () => {
+    const gmail_user = document.getElementById('gmail-user').value.trim();
+    clearError('step3-error');
+
+    if (!gmail_user)
+      return showError('step3-error', 'Enter your Gmail address before sending.');
+    if (!(await checkAuthStatus()))
+      return showError('step3-error', 'Authorize with Google before sending.');
+    if (!confirm(`Send ${allEmailsToSend.length} email(s)? This cannot be undone.`)) return;
+
+    const sendBtn = document.getElementById('send-btn');
+    sendBtn.disabled = true; sendBtn.textContent = 'Sending…';
+    document.getElementById('send-progress').style.display = 'block';
+    document.getElementById('send-results').style.display  = 'none';
+    document.getElementById('progress-bar').style.width = '20%';
+    document.getElementById('send-status').textContent = `Sending ${allEmailsToSend.length} emails…`;
+
+    try {
+      const res = await fetch('/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ gmail_user, emails: allEmailsToSend }),
+      });
+      const data = await res.json();
+      document.getElementById('progress-bar').style.width = '100%';
+
+      if (data.error) {
+        showError('step3-error', data.error);
+        document.getElementById('send-progress').style.display = 'none';
+        sendBtn.disabled = false; sendBtn.textContent = 'Send All Emails';
+        return;
+      }
+
+      setTimeout(() => {
+        document.getElementById('send-progress').style.display = 'none';
+        document.getElementById('send-results').style.display  = 'block';
+        document.getElementById('result-sent-count').textContent = `✓ ${data.sent.length} sent`;
+        document.getElementById('result-fail-count').textContent =
+          data.failed.length ? `✗ ${data.failed.length} failed` : '';
+
+        const rList = document.getElementById('result-list');
+        rList.innerHTML = '';
+        data.sent.forEach(email =>
+          rList.innerHTML += `<div class="result-row"><span class="dot dot-success"></span>${esc(email)}</div>`);
+        data.failed.forEach(f =>
+          rList.innerHTML += `<div class="result-row"><span class="dot dot-fail"></span>${esc(f.email)} — ${esc(f.error)}</div>`);
+        sendBtn.disabled = false; sendBtn.textContent = 'Send All Emails';
+      }, 400);
+
+    } catch(e) {
+      showError('step3-error', 'Request failed. Check your connection and try again.');
+      document.getElementById('send-progress').style.display = 'none';
+      sendBtn.disabled = false; sendBtn.textContent = 'Send All Emails';
+    }
+  });
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+  function populateSelect(id, options, selected) {
+    const sel = document.getElementById(id);
+    if (!sel) return;
+    sel.innerHTML = '';
+    options.forEach(opt => {
+      const o = document.createElement('option');
+      o.value = opt; o.textContent = opt;
+      if (opt === selected) o.selected = true;
+      sel.appendChild(o);
+    });
+  }
+
+  function autoGuess(cols, keywords) {
+    for (const kw of keywords) {
+      const match = cols.find(c => c.toLowerCase().includes(kw));
+      if (match) return match;
+    }
+    return cols[0];
+  }
+
+  function showError(id, msg) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = msg; el.style.display = 'block';
+  }
+
+  function clearError(id) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = ''; el.style.display = 'none';
+  }
+
+  function esc(str) {
+    return String(str)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+</script>
+</body>
+</html>

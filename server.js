@@ -32,7 +32,7 @@ app.use((req, res, next) => {
   next();
 });
 
-const { escHtml, sanitizeMimeHeader, htmlToPlainText, applyTemplate, parseRecipientList, isFatalSmtpError } = require('./utils');
+const { escHtml, sanitizeMimeHeader, htmlToPlainText, applyTemplate, parseRecipientList, isFatalSmtpError, validateColumns } = require('./utils');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
@@ -204,7 +204,9 @@ app.use(express.static(path.join(__dirname, 'public')));
 function readSpreadsheet(buffer) {
   const wb    = XLSX.read(buffer, { type: 'buffer' });
   const sheet = wb.Sheets[wb.SheetNames[0]];
-  const rows  = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+  // blankrows: true preserves blank rows so callers can warn when they're
+  // skipped — blank rows in a codes file shift code-to-recipient alignment.
+  const rows  = XLSX.utils.sheet_to_json(sheet, { defval: '', blankrows: true });
   // Strip UTF-8 BOM from column names — common in Windows/Excel CSV exports.
   // Without this, the first column is named '\uFEFFname' instead of 'name',
   // breaking auto-detection and column matching silently.
@@ -340,10 +342,12 @@ app.post('/send', async (req, res) => {
     : smtp_user;
 
   const transport = nodemailer.createTransport({
-    host:   smtp_host,
-    port:   parseInt(smtp_port) || 587,
-    secure: false,
-    auth:   { user: smtp_user, pass: smtp_pass },
+    host:              smtp_host,
+    port:              parseInt(smtp_port) || 587,
+    secure:            false,
+    auth:              { user: smtp_user, pass: smtp_pass },
+    connectionTimeout: 10_000, // abort if TCP connect takes > 10s (e.g. unrouteable IP)
+    greetingTimeout:   10_000, // abort if server doesn't send SMTP greeting within 10s
   });
 
   const sent = [], failed = [];

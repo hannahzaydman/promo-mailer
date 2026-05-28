@@ -496,6 +496,22 @@
       pointer-events: none;
     }
     .rich-body a { color: var(--accent); }
+    .link-popover {
+      padding: 12px 14px;
+      background: var(--surface2);
+      border-top: 1px solid var(--border);
+    }
+    .link-popover-fields {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .link-popover-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+    }
 
     .hidden { display: none !important; }
     #step1, #step2, #step3 { display: none; }
@@ -694,13 +710,11 @@
 
   // ── Rich text editor ──────────────────────────────────────────────────────
   function initEditor(id) {
-    const toolbar = document.getElementById(`toolbar-${id}`);
+    const toolbar  = document.getElementById(`toolbar-${id}`);
     if (!toolbar) return;
 
-    // Prevent toolbar clicks from stealing focus from the editor
     toolbar.addEventListener('mousedown', e => e.preventDefault());
 
-    // Format commands (bold/italic/underline)
     toolbar.querySelectorAll('[data-cmd]').forEach(btn => {
       btn.addEventListener('click', () => {
         document.execCommand(btn.dataset.cmd, false, null);
@@ -708,35 +722,57 @@
       });
     });
 
-    // Link button
-    const linkBtn = toolbar.querySelector('.link-btn');
-    if (linkBtn) {
-      linkBtn.addEventListener('click', () => {
-        const editor = document.getElementById(`body-${linkBtn.dataset.id}`);
-        if (!editor) return;
-        editor.focus();
+    const linkBtn    = toolbar.querySelector('.link-btn');
+    const popover    = document.getElementById(`link-popover-${id}`);
+    const textInput  = document.getElementById(`link-text-${id}`);
+    const urlInput   = document.getElementById(`link-url-${id}`);
+    const cancelBtn  = document.getElementById(`link-cancel-${id}`);
+    const insertBtn  = document.getElementById(`link-insert-${id}`);
+    if (!linkBtn || !popover) return;
+
+    let savedRange = null;
+
+    linkBtn.addEventListener('click', () => {
+      const editor = document.getElementById(`body-${id}`);
+      if (!editor) return;
+      editor.focus();
+      const sel = window.getSelection();
+      const selectedText = sel && !sel.isCollapsed ? sel.toString() : '';
+      savedRange = sel && !sel.isCollapsed ? sel.getRangeAt(0).cloneRange() : null;
+      textInput.value = selectedText;
+      urlInput.value  = '';
+      popover.style.display = 'block';
+      urlInput.focus();
+    });
+
+    cancelBtn.addEventListener('click', () => {
+      popover.style.display = 'none';
+      document.getElementById(`body-${id}`)?.focus();
+    });
+
+    insertBtn.addEventListener('click', () => {
+      const rawUrl = urlInput.value.trim();
+      if (!rawUrl) { urlInput.focus(); return; }
+      const href    = rawUrl.startsWith('http') ? rawUrl : 'https://' + rawUrl;
+      const display = textInput.value.trim() || href;
+      const editor  = document.getElementById(`body-${id}`);
+      if (!editor) return;
+      editor.focus();
+      if (savedRange) {
         const sel = window.getSelection();
-        const hasSelection = sel && !sel.isCollapsed;
-        const savedRange = hasSelection ? sel.getRangeAt(0).cloneRange() : null;
-        const url = prompt('Enter URL (e.g. https://bandcamp.com/...)');
-        if (!url) return;
-        const href = url.startsWith('http') ? url : 'https://' + url;
-        if (savedRange) {
-          sel.removeAllRanges();
-          sel.addRange(savedRange);
-        } else {
-          // No selection — insert link text
-          document.execCommand('insertHTML', false, `<a href="${esc(href)}">${esc(href)}</a>`);
-          return;
-        }
-        document.execCommand('createLink', false, href);
-        // Ensure links open in new tab
-        editor.querySelectorAll('a').forEach(a => {
-          a.target = '_blank';
-          a.rel = 'noopener noreferrer';
-        });
-      });
-    }
+        sel.removeAllRanges();
+        sel.addRange(savedRange);
+      }
+      document.execCommand('insertHTML', false,
+        `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(display)}</a>`);
+      popover.style.display = 'none';
+      savedRange = null;
+    });
+
+    urlInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter')  { e.preventDefault(); insertBtn.click(); }
+      if (e.key === 'Escape') { e.preventDefault(); cancelBtn.click(); }
+    });
   }
 
   // Update toolbar active states on selection change
@@ -795,10 +831,22 @@
               <button type="button" class="tool-btn" data-cmd="italic" title="Italic"><i>I</i></button>
               <button type="button" class="tool-btn" data-cmd="underline" title="Underline"><u>U</u></button>
               <div class="toolbar-sep"></div>
-              <button type="button" class="tool-btn link-btn" data-id="${id}" title="Insert link">&#128279; Link</button>
+              <button type="button" class="tool-btn link-btn" data-id="${id}" title="Insert link">
+                <svg viewBox="0 0 16 16" fill="none" width="14" height="14" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="display:block"><path d="M6.5 9.5a3.5 3.5 0 0 0 4.95 0l2-2a3.5 3.5 0 0 0-4.95-4.95l-1.25 1.25"/><path d="M9.5 6.5a3.5 3.5 0 0 0-4.95 0l-2 2a3.5 3.5 0 0 0 4.95 4.95l1.25-1.25"/></svg>
+              </button>
             </div>
             <div class="rich-body" id="body-${id}" contenteditable="true" spellcheck="true"
               data-placeholder="Hi {name}, here's your download code: {code}"></div>
+            <div class="link-popover" id="link-popover-${id}" style="display:none">
+              <div class="link-popover-fields">
+                <input type="text" id="link-text-${id}" placeholder="Link text (optional)" />
+                <input type="text" id="link-url-${id}" placeholder="https://" />
+              </div>
+              <div class="link-popover-actions">
+                <button type="button" class="btn btn-secondary" id="link-cancel-${id}" style="padding:6px 14px;font-size:0.72rem">Cancel</button>
+                <button type="button" class="btn" id="link-insert-${id}" style="padding:6px 14px;font-size:0.72rem">Insert</button>
+              </div>
+            </div>
           </div>
         </div>
       </div>

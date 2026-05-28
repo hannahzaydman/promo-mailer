@@ -115,8 +115,10 @@ const LOGIN_PAGE = (msg = '') => `<!DOCTYPE html>
 <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;700;800&display=swap" rel="stylesheet">
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
-  body{background:#0c0b10;color:#f0eef8;font-family:'Syne',sans-serif;
+  html{background:#0c0b10}
+  body{background:transparent;color:#f0eef8;font-family:'Syne',sans-serif;
        display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:40px 20px;gap:24px}
+  #star-canvas{position:fixed;inset:0;width:100%;height:100%;z-index:-1;pointer-events:none}
   .card{background:#131118;border:1px solid #2a2635;padding:40px 36px;
         text-align:center;max-width:360px;width:100%}
   .logo{width:64px;height:64px;object-fit:cover;display:block;margin:0 auto 20px}
@@ -131,7 +133,9 @@ const LOGIN_PAGE = (msg = '') => `<!DOCTYPE html>
   .err{color:#ff4455;font-size:.78rem;margin-top:16px;letter-spacing:.04em}
   footer{font-size:.6rem;letter-spacing:.18em;text-transform:uppercase;color:#4d4a5a}
 </style></head>
-<body><div class="card">
+<body>
+<canvas id="star-canvas"></canvas>
+<div class="card">
   <img src="https://f4.bcbits.com/img/0042095815_10.jpg" class="logo" alt="Midnight Ecstasy" />
   <h1>Promo Mailer</h1>
   <div class="sub">Upload · Compose · Send</div>
@@ -140,6 +144,7 @@ const LOGIN_PAGE = (msg = '') => `<!DOCTYPE html>
   ${msg ? `<p class="err">${escHtml(msg)}</p>` : ''}
 </div>
 <footer>a tool by midnight ecstasy</footer>
+<script src="/star-trails.js"></script>
 </body></html>`;
 
 app.get('/auth/login', (req, res) => {
@@ -225,9 +230,11 @@ app.get('/auth/logout', (req, res) => {
   req.session.destroy(() => res.redirect('/auth/login'));
 });
 
+// Static assets served before auth so unauthenticated pages (login) can load them
+app.use(express.static(path.join(__dirname, 'public')));
+
 // Apply auth middleware to all subsequent routes
 app.use(requireAuth);
-app.use(express.static(path.join(__dirname, 'public')));
 
 // ── Auth info ──────────────────────────────────────────────────────────────
 app.get('/auth/me', (req, res) => {

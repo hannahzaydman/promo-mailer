@@ -629,9 +629,84 @@
       justify-content: flex-end;
     }
 
+    /* ── Manual recipients ───────────────────────────────────────────────────── */
+    .manual-recipients {
+      margin-top: 24px;
+      padding-top: 20px;
+      border-top: 1px solid var(--border-soft);
+    }
+    .manual-recipients h3 {
+      font-size: 0.72rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      font-weight: 700;
+      color: var(--muted);
+      margin-bottom: 14px;
+    }
+    .manual-entry-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr auto;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .recipient-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 14px;
+      font-size: 0.83rem;
+    }
+    .recipient-table th {
+      text-align: left;
+      font-size: 0.65rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted);
+      font-weight: 700;
+      padding: 6px 8px;
+      border-bottom: 1px solid var(--border);
+    }
+    .recipient-table td {
+      padding: 7px 8px;
+      border-bottom: 1px solid var(--border-soft);
+      color: var(--text-secondary);
+      vertical-align: middle;
+    }
+    .recipient-table tr:last-child td { border-bottom: none; }
+    .recipient-table .td-name { color: var(--text); font-weight: 500; }
+    .recipient-table .btn-remove-row {
+      background: none;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 1rem;
+      line-height: 1;
+      padding: 2px 6px;
+      border-radius: 3px;
+      transition: color 0.15s;
+      font-family: inherit;
+    }
+    .recipient-table .btn-remove-row:hover { color: var(--danger); }
+    .step1-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
     .hidden { display: none !important; }
     #step1, #step2, #step3 { display: none; }
     #step1.active, #step2.active, #step3.active { display: block; }
+
+    /* ── Responsive header ──────────────────────────────────────────────────── */
+    @media (max-width: 680px) {
+      .header-aside {
+        position: static;
+        transform: none;
+        text-align: center;
+        margin-top: 16px;
+      }
+      .header-social {
+        justify-content: center;
+      }
+      .header-byline {
+        text-align: center;
+      }
+    }
   </style>
 </head>
 <body>
@@ -693,7 +768,7 @@
     <div id="col-selectors" class="hidden">
       <div class="col-row">
         <div class="field">
-          <label>Name Column</label>
+          <label>Name Column <span style="color:var(--muted);font-weight:400;letter-spacing:0">(optional)</span></label>
           <select id="name-col"></select>
         </div>
         <div class="field">
@@ -703,8 +778,26 @@
       </div>
     </div>
 
-    <div class="actions">
+    <div class="manual-recipients">
+      <h3>Add Recipients Manually</h3>
+      <div class="manual-entry-row">
+        <input type="text" id="manual-name" placeholder="Name (optional)" maxlength="200" />
+        <input type="email" id="manual-email" placeholder="Email" maxlength="320" />
+        <button class="btn btn-secondary" id="manual-add-btn">Add</button>
+      </div>
+      <div id="manual-recipients-wrap" class="hidden">
+        <table class="recipient-table">
+          <thead>
+            <tr><th>Name</th><th>Email</th><th></th></tr>
+          </thead>
+          <tbody id="manual-recipients-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="actions step1-actions">
       <button class="btn" id="step1-next" disabled>Next &rarr;</button>
+      <button class="btn btn-secondary hidden" id="export-recipients-btn">Export List</button>
     </div>
   </div>
 </div>
@@ -830,6 +923,7 @@
   let releases = [];
   let releaseIdCounter = 0;
   let allEmailsToSend = [];
+  let manualRecipients = [];
 
   // ── Step 1 ────────────────────────────────────────────────────────────────
   document.getElementById('recipient-file').addEventListener('change', async (e) => {
@@ -842,11 +936,73 @@
       const res = await fetch('/get-columns', { method: 'POST', body: fd });
       const data = await res.json();
       if (data.error) { showError('step1-error', data.error); return; }
-      populateSelect('name-col', data.columns, autoGuess(data.columns, ['name','artist','dj','recipient','first']));
+      populateNameColSelect(data.columns);
       populateSelect('email-col', data.columns, autoGuess(data.columns, ['email','e-mail','mail']));
       document.getElementById('col-selectors').classList.remove('hidden');
-      document.getElementById('step1-next').disabled = false;
+      updateStep1State();
     } catch(e) { showError('step1-error', 'Could not read file.'); }
+  });
+
+  // ── Manual recipient entry ────────────────────────────────────────────────
+  function updateStep1State() {
+    const hasFile   = !!djFile;
+    const hasManual = manualRecipients.length > 0;
+    document.getElementById('step1-next').disabled = !hasFile && !hasManual;
+    document.getElementById('export-recipients-btn').classList.toggle('hidden', !hasManual);
+    document.getElementById('manual-recipients-wrap').classList.toggle('hidden', !hasManual);
+  }
+
+  function renderManualTable() {
+    const tbody = document.getElementById('manual-recipients-body');
+    tbody.innerHTML = manualRecipients.map((r, i) => `
+      <tr>
+        <td class="td-name">${r.name ? esc(r.name) : '<span style="color:var(--muted);font-style:italic">—</span>'}</td>
+        <td>${esc(r.email)}</td>
+        <td><button class="btn-remove-row" data-idx="${i}" title="Remove">&times;</button></td>
+      </tr>
+    `).join('');
+    tbody.querySelectorAll('.btn-remove-row').forEach(btn => {
+      btn.addEventListener('click', () => {
+        manualRecipients.splice(parseInt(btn.dataset.idx), 1);
+        renderManualTable();
+        updateStep1State();
+      });
+    });
+    updateStep1State();
+  }
+
+  document.getElementById('manual-add-btn').addEventListener('click', () => {
+    const nameEl  = document.getElementById('manual-name');
+    const emailEl = document.getElementById('manual-email');
+    const name    = nameEl.value.trim();
+    const email   = emailEl.value.trim();
+    if (!email || !email.includes('@')) { emailEl.focus(); return; }
+    manualRecipients.push({ name, email });
+    nameEl.value  = '';
+    emailEl.value = '';
+    nameEl.focus();
+    renderManualTable();
+  });
+
+  document.getElementById('manual-email').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); document.getElementById('manual-add-btn').click(); }
+  });
+  document.getElementById('manual-name').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); document.getElementById('manual-email').value.trim() ? document.getElementById('manual-add-btn').click() : document.getElementById('manual-email').focus(); }
+  });
+
+  document.getElementById('export-recipients-btn').addEventListener('click', () => {
+    if (!manualRecipients.length) return;
+    const header = ['Name', 'Email'];
+    const rows   = manualRecipients.map(r => [r.name, r.email]);
+    const csv    = [header, ...rows]
+      .map(row => row.map(cell => `"${String(cell ?? '').replace(/"/g, '""')}"`).join(','))
+      .join('\r\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = 'recipients.csv'; a.click();
+    URL.revokeObjectURL(url);
   });
 
   // ── Rich text editor ──────────────────────────────────────────────────────
@@ -1157,9 +1313,14 @@
     }
 
     const fd = new FormData();
-    fd.append('recipient_file', djFile);
-    fd.append('name_col', document.getElementById('name-col').value);
-    fd.append('email_col', document.getElementById('email-col').value);
+    if (djFile) {
+      fd.append('recipient_file', djFile);
+      fd.append('name_col', document.getElementById('name-col').value);
+      fd.append('email_col', document.getElementById('email-col').value);
+    }
+    if (manualRecipients.length) {
+      fd.append('extra_recipients', JSON.stringify(manualRecipients));
+    }
     fd.append('release_count', releases.length);
 
     releases.forEach((r, i) => {
@@ -1513,6 +1674,22 @@
   });
 
   // ── Helpers ───────────────────────────────────────────────────────────────
+  function populateNameColSelect(columns) {
+    const sel = document.getElementById('name-col');
+    if (!sel) return;
+    sel.innerHTML = '';
+    const none = document.createElement('option');
+    none.value = '__none__'; none.textContent = '— no name column —';
+    sel.appendChild(none);
+    const guessed = autoGuess(columns, ['name','artist','dj','recipient','first']);
+    columns.forEach(col => {
+      const o = document.createElement('option');
+      o.value = col; o.textContent = col;
+      if (col === guessed) o.selected = true;
+      sel.appendChild(o);
+    });
+  }
+
   function populateSelect(id, options, selected) {
     const sel = document.getElementById(id);
     if (!sel) return;

@@ -2,7 +2,7 @@
 
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
-const { escHtml, sanitizeMimeHeader, htmlToPlainText, applyTemplate, parseRecipientList, isFatalSmtpError } = require('../utils');
+const { escHtml, sanitizeMimeHeader, htmlToPlainText, applyTemplate, parseRecipientList, partitionCodes, isFatalSmtpError } = require('../utils');
 
 // ── escHtml ──────────────────────────────────────────────────────────────────
 
@@ -269,12 +269,13 @@ describe('parseRecipientList', () => {
     ]);
   });
 
-  test('filters out rows with a missing name', () => {
+  test('keeps rows with a missing name as long as email is valid', () => {
     const rows = [
       { name: '',       email: 'one@test.com' },
       { name: 'DJ Two', email: 'two@test.com' },
     ];
     assert.deepEqual(parseRecipientList(rows, 'name', 'email'), [
+      { name: '',       email: 'one@test.com' },
       { name: 'DJ Two', email: 'two@test.com' },
     ]);
   });
@@ -286,9 +287,11 @@ describe('parseRecipientList', () => {
     ]);
   });
 
-  test('filters out rows where name is whitespace-only after trim', () => {
+  test('keeps rows where name is whitespace-only (trimmed to empty string) when email is valid', () => {
     const rows = [{ name: '   ', email: 'dj@test.com' }];
-    assert.deepEqual(parseRecipientList(rows, 'name', 'email'), []);
+    assert.deepEqual(parseRecipientList(rows, 'name', 'email'), [
+      { name: '', email: 'dj@test.com' },
+    ]);
   });
 
   test('handles null and undefined cell values without throwing', () => {
@@ -312,9 +315,13 @@ describe('parseRecipientList', () => {
     ]);
   });
 
-  test('silently drops all rows when column name does not exist', () => {
+  test('wrong name column yields empty name rather than dropping the row', () => {
+    // If the user selects a wrong name column, we still include the recipient —
+    // they'll just have an empty name. The email is what matters for delivery.
     const rows = [{ name: 'DJ Phantom', email: 'dj@test.com' }];
-    assert.deepEqual(parseRecipientList(rows, 'wrong_col', 'email'), []);
+    assert.deepEqual(parseRecipientList(rows, 'wrong_col', 'email'), [
+      { name: '', email: 'dj@test.com' },
+    ]);
   });
 
   test('filters out rows where email has no @ (e.g. Excel number-formatted cell)', () => {
@@ -343,6 +350,103 @@ describe('parseRecipientList', () => {
       { name: 'DJ Two',   email: 'two@test.com' },
       { name: 'DJ Three', email: 'three@test.com' },
     ]);
+  });
+
+  // ── optional name column ───────────────────────────────────────────────────
+  // Name is never a filter criterion — only a valid email is required.
+  // nameCol=null / '__none__' simply sets name='' for every row.
+
+  test('null nameCol: includes rows that have no name, uses empty string', () => {
+    const rows = [
+      { email: 'a@test.com' },
+      { email: 'b@test.com' },
+    ];
+    assert.deepEqual(parseRecipientList(rows, null, 'email'), [
+      { name: '', email: 'a@test.com' },
+      { name: '', email: 'b@test.com' },
+    ]);
+  });
+
+  test('"__none__" sentinel behaves identically to null nameCol', () => {
+    const rows = [{ name: 'DJ Phantom', email: 'dj@test.com' }];
+    assert.deepEqual(parseRecipientList(rows, '__none__', 'email'), [
+      { name: '', email: 'dj@test.com' },
+    ]);
+  });
+
+  test('null nameCol: still drops rows with a missing or invalid email', () => {
+    const rows = [
+      { email: '' },
+      { email: 'notanemail' },
+      { email: 'good@test.com' },
+    ];
+    assert.deepEqual(parseRecipientList(rows, null, 'email'), [
+      { name: '', email: 'good@test.com' },
+    ]);
+  });
+
+  test('null nameCol: rows with a blank name field are included', () => {
+    const rows = [
+      { name: '',        email: 'one@test.com' },
+      { name: 'DJ Two',  email: 'two@test.com' },
+    ];
+    assert.deepEqual(parseRecipientList(rows, null, 'email'), [
+      { name: '', email: 'one@test.com' },
+      { name: '', email: 'two@test.com' },
+    ]);
+  });
+});
+
+// ── partitionCodes ────────────────────────────────────────────────────────────
+
+describe('partitionCodes', () => {
+  test('assigns exactly recipientCount codes and leaves the rest unused', () => {
+    const codes = ['A1', 'B2', 'C3', 'D4', 'E5'];
+    const { assigned, unused } = partitionCodes(codes, 3);
+    assert.deepEqual(assigned, ['A1', 'B2', 'C3']);
+    assert.deepEqual(unused,   ['D4', 'E5']);
+  });
+
+  test('when codes === recipients, unused is empty', () => {
+    const codes = ['A1', 'B2'];
+    const { assigned, unused } = partitionCodes(codes, 2);
+    assert.deepEqual(assigned, ['A1', 'B2']);
+    assert.deepEqual(unused,   []);
+  });
+
+  test('recipientCount of 0 assigns nothing, all codes are unused', () => {
+    const codes = ['A1', 'B2', 'C3'];
+    const { assigned, unused } = partitionCodes(codes, 0);
+    assert.deepEqual(assigned, []);
+    assert.deepEqual(unused,   ['A1', 'B2', 'C3']);
+  });
+
+  test('empty codes array returns two empty arrays', () => {
+    const { assigned, unused } = partitionCodes([], 0);
+    assert.deepEqual(assigned, []);
+    assert.deepEqual(unused,   []);
+  });
+
+  test('does not mutate the original array', () => {
+    const codes = ['A1', 'B2', 'C3'];
+    partitionCodes(codes, 2);
+    assert.deepEqual(codes, ['A1', 'B2', 'C3']);
+  });
+
+  test('single recipient, multiple unused codes', () => {
+    const codes = ['X1', 'X2', 'X3', 'X4'];
+    const { assigned, unused } = partitionCodes(codes, 1);
+    assert.deepEqual(assigned, ['X1']);
+    assert.deepEqual(unused,   ['X2', 'X3', 'X4']);
+  });
+
+  test('preserves code order in both slices', () => {
+    const codes = ['first', 'second', 'third', 'fourth'];
+    const { assigned, unused } = partitionCodes(codes, 2);
+    assert.equal(assigned[0], 'first');
+    assert.equal(assigned[1], 'second');
+    assert.equal(unused[0],   'third');
+    assert.equal(unused[1],   'fourth');
   });
 });
 

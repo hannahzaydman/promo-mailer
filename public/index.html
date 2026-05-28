@@ -629,6 +629,65 @@
       justify-content: flex-end;
     }
 
+    /* ── Manual recipients ───────────────────────────────────────────────────── */
+    .manual-recipients {
+      margin-top: 24px;
+      padding-top: 20px;
+      border-top: 1px solid var(--border-soft);
+    }
+    .manual-recipients h3 {
+      font-size: 0.72rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      font-weight: 700;
+      color: var(--muted);
+      margin-bottom: 14px;
+    }
+    .manual-entry-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr auto;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .recipient-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 14px;
+      font-size: 0.83rem;
+    }
+    .recipient-table th {
+      text-align: left;
+      font-size: 0.65rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted);
+      font-weight: 700;
+      padding: 6px 8px;
+      border-bottom: 1px solid var(--border);
+    }
+    .recipient-table td {
+      padding: 7px 8px;
+      border-bottom: 1px solid var(--border-soft);
+      color: var(--text-secondary);
+      vertical-align: middle;
+    }
+    .recipient-table tr:last-child td { border-bottom: none; }
+    .recipient-table .td-name { color: var(--text); font-weight: 500; }
+    .recipient-table .btn-remove-row {
+      background: none;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 1rem;
+      line-height: 1;
+      padding: 2px 6px;
+      border-radius: 3px;
+      transition: color 0.15s;
+      font-family: inherit;
+    }
+    .recipient-table .btn-remove-row:hover { color: var(--danger); }
+    .step1-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
     .hidden { display: none !important; }
     #step1, #step2, #step3 { display: none; }
     #step1.active, #step2.active, #step3.active { display: block; }
@@ -693,7 +752,7 @@
     <div id="col-selectors" class="hidden">
       <div class="col-row">
         <div class="field">
-          <label>Name Column</label>
+          <label>Name Column <span style="color:var(--muted);font-weight:400;letter-spacing:0">(optional)</span></label>
           <select id="name-col"></select>
         </div>
         <div class="field">
@@ -703,8 +762,26 @@
       </div>
     </div>
 
-    <div class="actions">
+    <div class="manual-recipients">
+      <h3>Add Recipients Manually</h3>
+      <div class="manual-entry-row">
+        <input type="text" id="manual-name" placeholder="Name (optional)" maxlength="200" />
+        <input type="email" id="manual-email" placeholder="Email" maxlength="320" />
+        <button class="btn btn-secondary" id="manual-add-btn">Add</button>
+      </div>
+      <div id="manual-recipients-wrap" class="hidden">
+        <table class="recipient-table">
+          <thead>
+            <tr><th>Name</th><th>Email</th><th></th></tr>
+          </thead>
+          <tbody id="manual-recipients-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="actions step1-actions">
       <button class="btn" id="step1-next" disabled>Next &rarr;</button>
+      <button class="btn btn-secondary hidden" id="export-recipients-btn">Export List</button>
     </div>
   </div>
 </div>
@@ -745,42 +822,8 @@
         <input type="text" id="from-name" placeholder="e.g. Midnight Ecstasy" />
       </div>
       <div class="field">
-        <label>Your Email Address</label>
-        <input type="email" id="smtp-user" placeholder="you@gmail.com" autocomplete="username" />
-      </div>
-    </div>
-
-    <!-- Gmail OAuth option — shown only when server has GOOGLE_CLIENT_ID configured -->
-    <div id="gmail-auth-wrap" style="display:none;margin-bottom:18px">
-      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-        <button class="btn" id="gmail-auth-btn" type="button">Sign in with Google</button>
-        <span id="gmail-auth-status" style="font-size:0.8rem;color:var(--text-secondary)"></span>
-      </div>
-      <p class="hint" style="margin-top:8px">
-        Send directly via Gmail — no app password needed. Authorization is stored in your session only.
-      </p>
-    </div>
-
-    <!-- SMTP credentials — hidden when Gmail OAuth is active -->
-    <div id="smtp-creds-wrap">
-      <div class="col-row">
-        <div class="field">
-          <label>SMTP Host</label>
-          <input type="text" id="smtp-host" placeholder="smtp.gmail.com" />
-        </div>
-        <div class="field" style="max-width:160px">
-          <label>Port</label>
-          <input type="text" id="smtp-port" placeholder="587" />
-        </div>
-      </div>
-
-      <div class="field">
-        <label>Password / App Password</label>
-        <input type="password" id="smtp-pass" placeholder="&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;" autocomplete="current-password" />
-        <p class="hint" style="margin-top:6px">
-          Gmail: create an <strong>App Password</strong> at myaccount.google.com/apppasswords (requires 2-Step Verification).
-          Outlook/365: use your regular password or an app password if your org requires it.
-        </p>
+        <label>Sending From</label>
+        <div id="sending-from" style="padding:10px 0;font-size:0.85rem;color:var(--text-secondary)">—</div>
       </div>
     </div>
   </div>
@@ -822,6 +865,9 @@
     <div id="retry-wrap" style="display:none;margin-top:12px">
       <button class="btn btn-secondary" id="retry-btn"></button>
     </div>
+    <div id="export-unused-wrap" style="display:none;margin-top:12px">
+      <button class="btn btn-secondary" id="export-unused-btn" style="padding:7px 14px;font-size:0.72rem">Export Unused Codes</button>
+    </div>
   </div>
 </div>
 
@@ -830,6 +876,8 @@
   let releases = [];
   let releaseIdCounter = 0;
   let allEmailsToSend = [];
+  let manualRecipients = [];
+  let unusedCodesByRelease = {};
 
   // ── Step 1 ────────────────────────────────────────────────────────────────
   document.getElementById('recipient-file').addEventListener('change', async (e) => {
@@ -842,11 +890,74 @@
       const res = await fetch('/get-columns', { method: 'POST', body: fd });
       const data = await res.json();
       if (data.error) { showError('step1-error', data.error); return; }
-      populateSelect('name-col', data.columns, autoGuess(data.columns, ['name','artist','dj','recipient','first']));
+      populateNameColSelect(data.columns);
       populateSelect('email-col', data.columns, autoGuess(data.columns, ['email','e-mail','mail']));
       document.getElementById('col-selectors').classList.remove('hidden');
-      document.getElementById('step1-next').disabled = false;
+      updateStep1State();
     } catch(e) { showError('step1-error', 'Could not read file.'); }
+  });
+
+  // ── Manual recipient entry ────────────────────────────────────────────────
+  function updateStep1State() {
+    const hasFile = !!djFile;
+    const hasManual = manualRecipients.length > 0;
+    document.getElementById('step1-next').disabled = !hasFile && !hasManual;
+    document.getElementById('export-recipients-btn').classList.toggle('hidden', !hasManual);
+    document.getElementById('manual-recipients-wrap').classList.toggle('hidden', !hasManual);
+  }
+
+  function renderManualTable() {
+    const tbody = document.getElementById('manual-recipients-body');
+    tbody.innerHTML = manualRecipients.map((r, i) => `
+      <tr>
+        <td class="td-name">${r.name ? esc(r.name) : '<span style="color:var(--muted);font-style:italic">—</span>'}</td>
+        <td>${esc(r.email)}</td>
+        <td><button class="btn-remove-row" data-idx="${i}" title="Remove">&times;</button></td>
+      </tr>
+    `).join('');
+    tbody.querySelectorAll('.btn-remove-row').forEach(btn => {
+      btn.addEventListener('click', () => {
+        manualRecipients.splice(parseInt(btn.dataset.idx), 1);
+        renderManualTable();
+        updateStep1State();
+      });
+    });
+    updateStep1State();
+  }
+
+  document.getElementById('manual-add-btn').addEventListener('click', () => {
+    const nameEl  = document.getElementById('manual-name');
+    const emailEl = document.getElementById('manual-email');
+    const name    = nameEl.value.trim();
+    const email   = emailEl.value.trim();
+    if (!email || !email.includes('@')) { emailEl.focus(); return; }
+    manualRecipients.push({ name, email });
+    nameEl.value  = '';
+    emailEl.value = '';
+    nameEl.focus();
+    renderManualTable();
+  });
+
+  // Allow pressing Enter in the email field to add
+  document.getElementById('manual-email').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); document.getElementById('manual-add-btn').click(); }
+  });
+  document.getElementById('manual-name').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); document.getElementById('manual-email').value.trim() ? document.getElementById('manual-add-btn').click() : document.getElementById('manual-email').focus(); }
+  });
+
+  document.getElementById('export-recipients-btn').addEventListener('click', () => {
+    if (!manualRecipients.length) return;
+    const header = ['Name', 'Email'];
+    const rows   = manualRecipients.map(r => [r.name, r.email]);
+    const csv    = [header, ...rows]
+      .map(row => row.map(cell => `"${String(cell ?? '').replace(/"/g, '""')}"`).join(','))
+      .join('\r\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = 'recipients.csv'; a.click();
+    URL.revokeObjectURL(url);
   });
 
   // ── Rich text editor ──────────────────────────────────────────────────────
@@ -1157,9 +1268,14 @@
     }
 
     const fd = new FormData();
-    fd.append('recipient_file', djFile);
-    fd.append('name_col', document.getElementById('name-col').value);
-    fd.append('email_col', document.getElementById('email-col').value);
+    if (djFile) {
+      fd.append('recipient_file', djFile);
+      fd.append('name_col', document.getElementById('name-col').value);
+      fd.append('email_col', document.getElementById('email-col').value);
+    }
+    if (manualRecipients.length) {
+      fd.append('extra_recipients', JSON.stringify(manualRecipients));
+    }
     fd.append('release_count', releases.length);
 
     releases.forEach((r, i) => {
@@ -1179,6 +1295,8 @@
       const data = await res.json();
       if (data.error) { showError('step2-error', data.error); return; }
       allEmailsToSend = data.allEmails;
+      unusedCodesByRelease = data.unusedCodesByRelease || {};
+      document.getElementById('export-unused-btn').style.display = 'none';
       renderPreview(data.releases, data.total);
       showWarnings(data.warnings);
       goTo(3);
@@ -1252,84 +1370,17 @@
     btn.textContent = el.classList.contains('expanded') ? 'Show less' : 'Show more';
   }
 
-  // ── Gmail send OAuth ──────────────────────────────────────────────────────
-  let gmailAuthorized = false;
-
-  async function refreshGmailStatus() {
-    try {
-      const res  = await fetch('/auth/gmail/status');
-      const data = await res.json();
-      const wrap   = document.getElementById('gmail-auth-wrap');
-      const btn    = document.getElementById('gmail-auth-btn');
-      const status = document.getElementById('gmail-auth-status');
-      const creds  = document.getElementById('smtp-creds-wrap');
-      if (!data.hasOAuth) { wrap.style.display = 'none'; return; }
-      wrap.style.display = 'block';
-      gmailAuthorized = data.authorized;
-      if (data.authorized) {
-        btn.textContent     = 'Disconnect Gmail';
-        status.textContent  = '✓ Connected';
-        status.style.color  = 'var(--success)';
-        creds.style.display = 'none';
-      } else {
-        btn.textContent     = 'Sign in with Google';
-        status.textContent  = '';
-        creds.style.display = '';
-      }
-    } catch (e) { /* silently ignore */ }
-  }
-
-  document.getElementById('gmail-auth-btn').addEventListener('click', async () => {
-    if (gmailAuthorized) {
-      await fetch('/auth/gmail/revoke', { method: 'POST' });
-      await refreshGmailStatus();
-      return;
-    }
-    try {
-      const res  = await fetch('/auth/gmail/setup', { method: 'POST' });
-      const data = await res.json();
-      if (data.error) { showError('step3-error', data.error); return; }
-      const popup = window.open(data.authUrl, 'gmail-send-auth', 'width=500,height=640,noopener');
-      window.addEventListener('message', async (e) => {
-        if (e.data === 'gmail-authorized') { popup?.close(); await refreshGmailStatus(); }
-        if (e.data === 'gmail-error')      { popup?.close(); showError('step3-error', 'Gmail authorization failed. Please try again.'); }
-      }, { once: true });
-      const poll = setInterval(async () => {
-        if (popup?.closed) { clearInterval(poll); await refreshGmailStatus(); }
-      }, 1000);
-    } catch (e) {
-      showError('step3-error', 'Could not start Gmail authorization: ' + e.message);
-    }
-  });
-
-  // Refresh Gmail status whenever the user navigates to step 3
-  const _origGoTo = goTo;
-  goTo = function(n) { _origGoTo(n); if (n === 3) refreshGmailStatus(); };
-
-  // ── SMTP auto-fill ────────────────────────────────────────────────────────
-  document.getElementById('smtp-user').addEventListener('change', () => {
-    const email  = document.getElementById('smtp-user').value.trim();
-    const domain = email.split('@')[1]?.toLowerCase() || '';
-    const hostEl = document.getElementById('smtp-host');
-    const portEl = document.getElementById('smtp-port');
-    if (!hostEl.value && !portEl.value) {
-      if (domain === 'gmail.com' || domain === 'googlemail.com') {
-        hostEl.value = 'smtp.gmail.com'; portEl.value = '587';
-      } else if (['outlook.com','hotmail.com','live.com'].includes(domain) || domain.endsWith('.onmicrosoft.com')) {
-        hostEl.value = 'smtp.office365.com'; portEl.value = '587';
-      }
-    }
-  });
+  // ── Populate "Sending From" label on step 3 ───────────────────────────────
+  fetch('/auth/me')
+    .then(r => r.json())
+    .then(d => {
+      if (d.email) document.getElementById('sending-from').textContent = d.email;
+    })
+    .catch(() => {});
 
   // ── Send helpers ──────────────────────────────────────────────────────────
   function getSmtpConfig() {
-    return {
-      smtp_host: document.getElementById('smtp-host').value.trim(),
-      smtp_port: document.getElementById('smtp-port').value.trim(),
-      smtp_user: document.getElementById('smtp-user').value.trim(),
-      smtp_pass: document.getElementById('smtp-pass').value,
-      from_name: document.getElementById('from-name').value.trim(),
-    };
+    return { from_name: document.getElementById('from-name').value.trim() };
   }
 
   function setSendUIBusy(busy) {
@@ -1410,12 +1461,6 @@
 
   document.getElementById('send-btn').addEventListener('click', async () => {
     clearError('step3-error');
-    const smtp = getSmtpConfig();
-
-    if (!smtp.smtp_user)
-      return showError('step3-error', 'Enter your email address before sending.');
-    if (!gmailAuthorized && (!smtp.smtp_host || !smtp.smtp_pass))
-      return showError('step3-error', 'Enter your SMTP host and password, or sign in with Google.');
     if (!confirm(`Send ${allEmailsToSend.length} email(s)? This cannot be undone.`)) return;
 
     setSendUIBusy(true);
@@ -1441,6 +1486,9 @@
       document.getElementById('retry-wrap').style.display = 'block';
     }
 
+    const hasUnused = Object.values(unusedCodesByRelease).some(codes => codes.length > 0);
+    document.getElementById('export-unused-wrap').style.display = hasUnused ? 'block' : 'none';
+
     setSendUIBusy(false);
   });
 
@@ -1452,8 +1500,6 @@
     if (!failedItems.length) return;
 
     const smtp = getSmtpConfig();
-    if (!smtp.smtp_user || (!gmailAuthorized && (!smtp.smtp_host || !smtp.smtp_pass)))
-      return showError('step3-error', 'Enter your SMTP settings before retrying.');
 
     setSendUIBusy(true);
     document.getElementById('retry-wrap').style.display = 'none';
@@ -1481,21 +1527,27 @@
   // ── Test email ────────────────────────────────────────────────────────────
   document.getElementById('test-send-btn').addEventListener('click', async () => {
     clearError('step3-error');
-    const smtp = getSmtpConfig();
-
-    if (!smtp.smtp_user)
-      return showError('step3-error', 'Enter your email address first.');
-    if (!gmailAuthorized && (!smtp.smtp_host || !smtp.smtp_pass))
-      return showError('step3-error', 'Enter your SMTP host and password first, or sign in with Google.');
     if (!allEmailsToSend.length)
       return showError('step3-error', 'Generate a preview first.');
 
-    const btn = document.getElementById('test-send-btn');
+    const smtp = getSmtpConfig();
+    const btn  = document.getElementById('test-send-btn');
     btn.disabled = true; btn.textContent = 'Sending…';
 
-    // Send the first email in the batch to your own address so you see
-    // exactly what a recipient will receive, with real name/code substituted.
-    const sample = { ...allEmailsToSend[0], email: smtp.smtp_user };
+    // Fetch the signed-in address and send the first email to yourself so
+    // you see exactly what a recipient will receive, with real name/code substituted.
+    let myEmail;
+    try {
+      const meRes = await fetch('/auth/me');
+      const me    = await meRes.json();
+      myEmail = me.email;
+    } catch (e) {
+      showError('step3-error', 'Could not retrieve your email address. Please sign in again.');
+      btn.disabled = false; btn.textContent = 'Send test to me';
+      return;
+    }
+
+    const sample = { ...allEmailsToSend[0], email: myEmail };
     try {
       const data = await sendOne(smtp, sample);
       if (data.sent?.length) {
@@ -1513,6 +1565,23 @@
   });
 
   // ── Helpers ───────────────────────────────────────────────────────────────
+  function populateNameColSelect(columns) {
+    const sel = document.getElementById('name-col');
+    if (!sel) return;
+    sel.innerHTML = '';
+    // Add a "no name" sentinel first
+    const none = document.createElement('option');
+    none.value = '__none__'; none.textContent = '— no name column —';
+    sel.appendChild(none);
+    const guessed = autoGuess(columns, ['name','artist','dj','recipient','first']);
+    columns.forEach(col => {
+      const o = document.createElement('option');
+      o.value = col; o.textContent = col;
+      if (col === guessed) o.selected = true;
+      sel.appendChild(o);
+    });
+  }
+
   function populateSelect(id, options, selected) {
     const sel = document.getElementById(id);
     if (!sel) return;
@@ -1570,6 +1639,27 @@
   }
 
   document.getElementById('export-csv-btn').addEventListener('click', exportCsv);
+
+  function exportUnusedCodes() {
+    const rows = [];
+    for (const [release, codes] of Object.entries(unusedCodesByRelease)) {
+      for (const code of codes) {
+        rows.push([release, code]);
+      }
+    }
+    if (!rows.length) return;
+    const header = ['Release', 'Unused Code'];
+    const csv = [header, ...rows]
+      .map(row => row.map(cell => `"${String(cell ?? '').replace(/"/g, '""')}"`).join(','))
+      .join('\r\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = 'unused-codes.csv'; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  document.getElementById('export-unused-btn').addEventListener('click', exportUnusedCodes);
 
   function esc(str) {
     return String(str)

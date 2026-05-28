@@ -735,7 +735,7 @@
 <!-- STEP 3 -->
 <div id="step3">
   <div class="card">
-    <h2>SMTP Settings</h2>
+    <h2>Sender Settings</h2>
 
     <div class="col-row">
       <div class="field">
@@ -748,24 +748,38 @@
       </div>
     </div>
 
-    <div class="col-row">
-      <div class="field">
-        <label>SMTP Host</label>
-        <input type="text" id="smtp-host" placeholder="smtp.gmail.com" />
+    <!-- Gmail OAuth option — shown only when server has GOOGLE_CLIENT_ID configured -->
+    <div id="gmail-auth-wrap" style="display:none;margin-bottom:18px">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <button class="btn" id="gmail-auth-btn" type="button">Sign in with Google</button>
+        <span id="gmail-auth-status" style="font-size:0.8rem;color:var(--text-secondary)"></span>
       </div>
-      <div class="field" style="max-width:160px">
-        <label>Port</label>
-        <input type="text" id="smtp-port" placeholder="587" />
-      </div>
+      <p class="hint" style="margin-top:8px">
+        Send directly via Gmail — no app password needed. Authorization is stored in your session only.
+      </p>
     </div>
 
-    <div class="field">
-      <label>Password / App Password</label>
-      <input type="password" id="smtp-pass" placeholder="&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;" autocomplete="current-password" />
-      <p class="hint" style="margin-top:6px">
-        Gmail: create an <strong>App Password</strong> at myaccount.google.com/apppasswords (requires 2-Step Verification).
-        Outlook/365: use your regular password or an app password if your org requires it.
-      </p>
+    <!-- SMTP credentials — hidden when Gmail OAuth is active -->
+    <div id="smtp-creds-wrap">
+      <div class="col-row">
+        <div class="field">
+          <label>SMTP Host</label>
+          <input type="text" id="smtp-host" placeholder="smtp.gmail.com" />
+        </div>
+        <div class="field" style="max-width:160px">
+          <label>Port</label>
+          <input type="text" id="smtp-port" placeholder="587" />
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Password / App Password</label>
+        <input type="password" id="smtp-pass" placeholder="&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;" autocomplete="current-password" />
+        <p class="hint" style="margin-top:6px">
+          Gmail: create an <strong>App Password</strong> at myaccount.google.com/apppasswords (requires 2-Step Verification).
+          Outlook/365: use your regular password or an app password if your org requires it.
+        </p>
+      </div>
     </div>
   </div>
 
@@ -1236,6 +1250,60 @@
     btn.textContent = el.classList.contains('expanded') ? 'Show less' : 'Show more';
   }
 
+  // ── Gmail send OAuth ──────────────────────────────────────────────────────
+  let gmailAuthorized = false;
+
+  async function refreshGmailStatus() {
+    try {
+      const res  = await fetch('/auth/gmail/status');
+      const data = await res.json();
+      const wrap   = document.getElementById('gmail-auth-wrap');
+      const btn    = document.getElementById('gmail-auth-btn');
+      const status = document.getElementById('gmail-auth-status');
+      const creds  = document.getElementById('smtp-creds-wrap');
+      if (!data.hasOAuth) { wrap.style.display = 'none'; return; }
+      wrap.style.display = 'block';
+      gmailAuthorized = data.authorized;
+      if (data.authorized) {
+        btn.textContent     = 'Disconnect Gmail';
+        status.textContent  = '✓ Connected';
+        status.style.color  = 'var(--success)';
+        creds.style.display = 'none';
+      } else {
+        btn.textContent     = 'Sign in with Google';
+        status.textContent  = '';
+        creds.style.display = '';
+      }
+    } catch (e) { /* silently ignore */ }
+  }
+
+  document.getElementById('gmail-auth-btn').addEventListener('click', async () => {
+    if (gmailAuthorized) {
+      await fetch('/auth/gmail/revoke', { method: 'POST' });
+      await refreshGmailStatus();
+      return;
+    }
+    try {
+      const res  = await fetch('/auth/gmail/setup', { method: 'POST' });
+      const data = await res.json();
+      if (data.error) { showError('step3-error', data.error); return; }
+      const popup = window.open(data.authUrl, 'gmail-send-auth', 'width=500,height=640,noopener');
+      window.addEventListener('message', async (e) => {
+        if (e.data === 'gmail-authorized') { popup?.close(); await refreshGmailStatus(); }
+        if (e.data === 'gmail-error')      { popup?.close(); showError('step3-error', 'Gmail authorization failed. Please try again.'); }
+      }, { once: true });
+      const poll = setInterval(async () => {
+        if (popup?.closed) { clearInterval(poll); await refreshGmailStatus(); }
+      }, 1000);
+    } catch (e) {
+      showError('step3-error', 'Could not start Gmail authorization: ' + e.message);
+    }
+  });
+
+  // Refresh Gmail status whenever the user navigates to step 3
+  const _origGoTo = goTo;
+  goTo = function(n) { _origGoTo(n); if (n === 3) refreshGmailStatus(); };
+
   // ── SMTP auto-fill ────────────────────────────────────────────────────────
   document.getElementById('smtp-user').addEventListener('change', () => {
     const email  = document.getElementById('smtp-user').value.trim();
@@ -1344,8 +1412,8 @@
 
     if (!smtp.smtp_user)
       return showError('step3-error', 'Enter your email address before sending.');
-    if (!smtp.smtp_host || !smtp.smtp_pass)
-      return showError('step3-error', 'Enter your SMTP host and password before sending.');
+    if (!gmailAuthorized && (!smtp.smtp_host || !smtp.smtp_pass))
+      return showError('step3-error', 'Enter your SMTP host and password, or sign in with Google.');
     if (!confirm(`Send ${allEmailsToSend.length} email(s)? This cannot be undone.`)) return;
 
     setSendUIBusy(true);
@@ -1382,7 +1450,7 @@
     if (!failedItems.length) return;
 
     const smtp = getSmtpConfig();
-    if (!smtp.smtp_user || !smtp.smtp_host || !smtp.smtp_pass)
+    if (!smtp.smtp_user || (!gmailAuthorized && (!smtp.smtp_host || !smtp.smtp_pass)))
       return showError('step3-error', 'Enter your SMTP settings before retrying.');
 
     setSendUIBusy(true);
@@ -1415,8 +1483,8 @@
 
     if (!smtp.smtp_user)
       return showError('step3-error', 'Enter your email address first.');
-    if (!smtp.smtp_host || !smtp.smtp_pass)
-      return showError('step3-error', 'Enter your SMTP host and password first.');
+    if (!gmailAuthorized && (!smtp.smtp_host || !smtp.smtp_pass))
+      return showError('step3-error', 'Enter your SMTP host and password first, or sign in with Google.');
     if (!allEmailsToSend.length)
       return showError('step3-error', 'Generate a preview first.');
 

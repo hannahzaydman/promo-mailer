@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "server.js",
   "scripts": {
-    "test": "node --test test/utils.test.js"
+    "test": "node --test test/utils.test.js test/security.test.js"
   },
   "dependencies": {
     "@google-cloud/firestore": "^8.6.0",

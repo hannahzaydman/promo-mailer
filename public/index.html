@@ -31,7 +31,7 @@
       color: var(--text);
       font-family: 'Syne', sans-serif;
       min-height: 100vh;
-      padding: 52px 20px 100px;
+      padding: 52px 20px 60px;
     }
 
     /* ── Header ─────────────────────────────────────────────────────────────── */
@@ -64,50 +64,51 @@
       margin: 0 auto 18px;
       image-rendering: auto;
     }
-    footer {
-      text-align: center;
-      padding: 40px 20px 48px;
-      border-top: 1px solid var(--border);
-      margin-top: 24px;
+    .header-aside {
+      position: absolute;
+      right: 0;
+      top: 50%;
+      transform: translateY(-50%);
+      text-align: right;
     }
-    .footer-byline {
-      font-size: 0.62rem;
-      letter-spacing: 0.2em;
+    .header-byline {
+      font-size: 0.65rem;
+      letter-spacing: 0.18em;
       text-transform: uppercase;
-      color: var(--muted);
-      font-weight: 500;
-      margin-bottom: 14px;
-    }
-    .footer-byline a {
       color: var(--text-secondary);
+      font-weight: 500;
+      margin-bottom: 10px;
+    }
+    .header-byline a {
+      color: var(--text);
       text-decoration: none;
       font-weight: 700;
-      letter-spacing: 0.14em;
       transition: color 0.15s;
     }
-    .footer-byline a:hover { color: var(--accent); }
-    .footer-links {
-      display: inline-flex;
+    .header-byline a:hover { color: var(--accent); }
+    .header-social {
+      display: flex;
       align-items: center;
-      gap: 6px;
+      justify-content: flex-end;
+      gap: 4px;
     }
-    .footer-links a {
+    .header-social a {
       font-size: 0.6rem;
-      letter-spacing: 0.16em;
+      letter-spacing: 0.14em;
       text-transform: uppercase;
       font-weight: 700;
       color: var(--muted);
       text-decoration: none;
       transition: color 0.15s;
-      padding: 4px 8px;
+      padding: 3px 6px;
       border: 1px solid transparent;
     }
-    .footer-links a:hover {
+    .header-social a:hover {
       color: var(--accent);
       border-color: rgba(68, 85, 255, 0.3);
     }
-    .footer-sep {
-      width: 1px; height: 10px;
+    .header-sep {
+      width: 1px; height: 8px;
       background: var(--border);
     }
     header h1 {
@@ -636,6 +637,16 @@
 <body>
 
 <header>
+  <div class="header-aside">
+    <div class="header-byline">a tool by <a href="https://midnightecstasy.bandcamp.com" target="_blank" rel="noopener noreferrer">midnight ecstasy</a></div>
+    <div class="header-social">
+      <a href="https://midnightecstasy.bandcamp.com" target="_blank" rel="noopener noreferrer">Bandcamp</a>
+      <div class="header-sep"></div>
+      <a href="https://soundcloud.com/midnight-ecstasy" target="_blank" rel="noopener noreferrer">SoundCloud</a>
+      <div class="header-sep"></div>
+      <a href="https://www.instagram.com/midnight__ecstasy/" target="_blank" rel="noopener noreferrer">Instagram</a>
+    </div>
+  </div>
   <img src="https://f4.bcbits.com/img/0042095815_10.jpg" class="label-logo" alt="Midnight Ecstasy" />
   <div class="header-logo">
     <h1>Promo Mailer</h1>
@@ -1561,18 +1572,6 @@
   }
 </script>
 
-<footer>
-  <div class="footer-byline">
-    a tool by <a href="https://midnightecstasy.bandcamp.com" target="_blank" rel="noopener noreferrer">midnight ecstasy</a>
-  </div>
-  <div class="footer-links">
-    <a href="https://midnightecstasy.bandcamp.com" target="_blank" rel="noopener noreferrer">Bandcamp</a>
-    <div class="footer-sep"></div>
-    <a href="https://soundcloud.com/midnight-ecstasy" target="_blank" rel="noopener noreferrer">SoundCloud</a>
-    <div class="footer-sep"></div>
-    <a href="https://www.instagram.com/midnight__ecstasy/" target="_blank" rel="noopener noreferrer">Instagram</a>
-  </div>
-</footer>
 
 </body>
 </html>

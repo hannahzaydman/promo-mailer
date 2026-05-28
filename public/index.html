@@ -691,6 +691,22 @@
     .hidden { display: none !important; }
     #step1, #step2, #step3 { display: none; }
     #step1.active, #step2.active, #step3.active { display: block; }
+
+    /* ── Responsive header ──────────────────────────────────────────────────── */
+    @media (max-width: 680px) {
+      .header-aside {
+        position: static;
+        transform: none;
+        text-align: center;
+        margin-top: 16px;
+      }
+      .header-social {
+        justify-content: center;
+      }
+      .header-byline {
+        text-align: center;
+      }
+    }
   </style>
 </head>
 <body>

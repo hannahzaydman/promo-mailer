@@ -88,4 +88,24 @@ function parseRecipientList(rows, nameCol, emailCol) {
     .filter(r => r.name && r.email && r.email.includes('@'));
 }
 
-module.exports = { escHtml, sanitizeMimeHeader, htmlToPlainText, applyTemplate, parseRecipientList };
+// Errors that mean retrying further emails won't help — abort the batch.
+const FATAL_SMTP_ERRORS = [
+  'invalid login',
+  'authentication failed',
+  'authentication unsuccessful',
+  'too many login attempts',
+  'daily sending limit exceeded',
+  'daily limit exceeded',
+  'user rate limit exceeded',
+];
+
+/**
+ * Returns true if the SMTP error message indicates a fatal condition where
+ * retrying remaining emails in the batch won't help (auth failures, quota).
+ */
+function isFatalSmtpError(message) {
+  const lower = String(message).toLowerCase();
+  return FATAL_SMTP_ERRORS.some(pat => lower.includes(pat));
+}
+
+module.exports = { escHtml, sanitizeMimeHeader, htmlToPlainText, applyTemplate, parseRecipientList, isFatalSmtpError };

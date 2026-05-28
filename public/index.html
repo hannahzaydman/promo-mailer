@@ -276,6 +276,21 @@
       display: none;
     }
 
+    /* ── Warning banner ──────────────────────────────────────────────────────── */
+    .warning-banner {
+      background: rgba(230, 162, 40, 0.07);
+      border: 1px solid rgba(230, 162, 40, 0.3);
+      color: #c9962a;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 0.83rem;
+      margin-bottom: 18px;
+      display: none;
+      line-height: 1.55;
+    }
+    .warning-banner ul { margin: 5px 0 0 16px; }
+    .warning-banner li { margin-bottom: 3px; }
+
     /* ── Release cards ───────────────────────────────────────────────────────── */
     .release-card-inner {
       background: var(--surface2);
@@ -655,6 +670,7 @@
   <div class="card">
     <h2>Email Preview</h2>
     <div id="step3-error" class="error-banner"></div>
+    <div id="preview-warnings" class="warning-banner"></div>
 
     <div class="preview-meta">
       <span class="count" id="preview-count"></span>
@@ -947,6 +963,7 @@
       if (data.error) { showError('step2-error', data.error); return; }
       allEmailsToSend = data.allEmails;
       renderPreview(data.releases, data.total);
+      showWarnings(data.warnings);
       goTo(3);
     } catch(e) {
       showError('step2-error', `Preview failed: ${e.message}`);
@@ -1133,6 +1150,9 @@
         document.getElementById('result-sent-count').textContent = `✓ ${data.sent.length} sent`;
         document.getElementById('result-fail-count').textContent =
           data.failed.length ? `✗ ${data.failed.length} failed` : '';
+        if (data.aborted) {
+          showError('step3-error', `Send aborted: ${data.abortReason}. Re-authorize Gmail and try again.`);
+        }
 
         const rList = document.getElementById('result-list');
         rList.innerHTML = '';
@@ -1181,6 +1201,16 @@
     const el = document.getElementById(id);
     if (!el) return;
     el.textContent = ''; el.style.display = 'none';
+  }
+
+  function showWarnings(warnings) {
+    const el = document.getElementById('preview-warnings');
+    if (!el) return;
+    if (!warnings?.length) { el.style.display = 'none'; return; }
+    el.innerHTML = '<strong>Heads up:</strong><ul>' +
+      warnings.map(w => `<li>${esc(w)}</li>`).join('') +
+      '</ul>';
+    el.style.display = 'block';
   }
 
   function esc(str) {

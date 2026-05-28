@@ -219,6 +219,34 @@ describe('applyTemplate', () => {
   test('handles empty template', () => {
     assert.equal(applyTemplate('', 'DJ', 'CODE'), '');
   });
+
+  test('URL-encodes {code} inside an href attribute', () => {
+    assert.equal(
+      applyTemplate('<a href="https://bandcamp.com/redeem/{code}">link</a>', 'DJ', 'XK9F&2MQT'),
+      '<a href="https://bandcamp.com/redeem/XK9F%262MQT">link</a>'
+    );
+  });
+
+  test('URL-encodes {name} with spaces inside an href attribute', () => {
+    assert.equal(
+      applyTemplate('<a href="https://example.com/{name}">click</a>', 'DJ Phantom', 'CODE'),
+      '<a href="https://example.com/DJ%20Phantom">click</a>'
+    );
+  });
+
+  test('URL-encodes href but still HTML-escapes the link text', () => {
+    assert.equal(
+      applyTemplate('<a href="https://example.com/{code}">{name}</a>', 'Rock & Roll', 'X&Y'),
+      '<a href="https://example.com/X%26Y">Rock &amp; Roll</a>'
+    );
+  });
+
+  test('href without placeholders is left unchanged', () => {
+    assert.equal(
+      applyTemplate('<a href="https://example.com">visit {name}</a>', 'DJ', 'CODE'),
+      '<a href="https://example.com">visit DJ</a>'
+    );
+  });
 });
 
 // ── parseDjList ───────────────────────────────────────────────────────────────
@@ -287,6 +315,21 @@ describe('parseDjList', () => {
   test('silently drops all rows when column name does not exist', () => {
     const rows = [{ name: 'DJ Phantom', email: 'dj@test.com' }];
     assert.deepEqual(parseDjList(rows, 'wrong_col', 'email'), []);
+  });
+
+  test('filters out rows where email has no @ (e.g. Excel number-formatted cell)', () => {
+    const rows = [
+      { name: 'DJ One', email: '45292' },      // Excel date serial number
+      { name: 'DJ Two', email: 'dj@test.com' },
+    ];
+    assert.deepEqual(parseDjList(rows, 'name', 'email'), [
+      { name: 'DJ Two', email: 'dj@test.com' },
+    ]);
+  });
+
+  test('filters out rows where email is a plain word with no @', () => {
+    const rows = [{ name: 'DJ Phantom', email: 'notanemail' }];
+    assert.deepEqual(parseDjList(rows, 'name', 'email'), []);
   });
 
   test('preserves order and handles multiple valid rows', () => {

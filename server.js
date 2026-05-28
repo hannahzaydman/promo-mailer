@@ -271,7 +271,7 @@ app.get('/auth/callback', async (req, res) => {
 
     res.send(`<html><body style="${style}#c8f135">
       <p>&#10003; Authorized! You can close this tab.</p>
-      <script>window.opener?.postMessage('gmail-authorized','*');window.close();</script>
+      <script>window.opener?.postMessage('gmail-authorized', window.location.origin);window.close();</script>
     </body></html>`);
   } catch (e) {
     res.send(`<html><body style="${style}#ff5c5c">
@@ -362,7 +362,20 @@ async function sendGmail(accessToken, from, to, subject, htmlBody) {
 function readSpreadsheet(buffer) {
   const wb    = XLSX.read(buffer, { type: 'buffer' });
   const sheet = wb.Sheets[wb.SheetNames[0]];
-  return XLSX.utils.sheet_to_json(sheet, { defval: '' });
+  const rows  = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+  // Strip UTF-8 BOM from column names — common in Windows/Excel CSV exports.
+  // Without this, the first column is named '\uFEFFname' instead of 'name',
+  // breaking auto-detection and column matching silently.
+  if (rows.length === 0) return rows;
+  const hasBom = Object.keys(rows[0]).some(k => k.startsWith('\uFEFF'));
+  if (!hasBom) return rows;
+  return rows.map(row => {
+    const cleaned = {};
+    for (const [key, val] of Object.entries(row)) {
+      cleaned[key.replace(/^\uFEFF/, '')] = val;
+    }
+    return cleaned;
+  });
 }
 
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
@@ -385,15 +398,34 @@ const previewUpload = multer({ storage: multer.memoryStorage(), limits: { fileSi
 app.post('/preview', previewUpload, (req, res) => {
   try {
     const { name_col, email_col, release_count } = req.body;
-    const count = parseInt(release_count) || 0;
+    // Cap at 10 to match the UI limit and prevent runaway iteration
+    const count = Math.min(parseInt(release_count) || 0, 10);
     if (count === 0) return res.status(400).json({ error: 'No releases provided' });
 
     const djFileInfo = req.files['dj_file']?.[0];
     if (!djFileInfo) return res.status(400).json({ error: 'DJ file missing' });
 
-    const djList = parseDjList(readSpreadsheet(djFileInfo.buffer), name_col, email_col);
+    const warnings = [];
 
-    if (!djList.length) return res.status(400).json({ error: 'No valid DJ rows found' });
+    // Parse DJ list and warn if rows were silently dropped
+    const rawDjRows = readSpreadsheet(djFileInfo.buffer);
+    const djList    = parseDjList(rawDjRows, name_col, email_col);
+
+    if (!djList.length) return res.status(400).json({ error: 'No valid DJ rows found. Check that the correct name and email columns are selected, and that email addresses contain @.' });
+
+    const dropped = rawDjRows.length - djList.length;
+    if (dropped > 0) {
+      warnings.push(`${dropped} DJ row${dropped !== 1 ? 's' : ''} were skipped (blank, missing name/email, or invalid email format). If you prepared your codes file to align row-for-row, the assignment order may be off.`);
+    }
+
+    // Warn about duplicate email addresses in the DJ list
+    const emailCount = {};
+    djList.forEach(dj => { emailCount[dj.email] = (emailCount[dj.email] || 0) + 1; });
+    const dupes = Object.keys(emailCount).filter(e => emailCount[e] > 1);
+    if (dupes.length > 0) {
+      const preview = dupes.slice(0, 3).join(', ') + (dupes.length > 3 ? '…' : '');
+      warnings.push(`${dupes.length} duplicate email address${dupes.length !== 1 ? 'es' : ''} found — those DJs will receive multiple emails: ${preview}`);
+    }
 
     const releases = [];
     for (let i = 0; i < count; i++) {
@@ -405,9 +437,14 @@ app.post('/preview', previewUpload, (req, res) => {
       const body     = req.body[`body_${i}`] || '';
       const name     = req.body[`release_name_${i}`] || `Release ${i + 1}`;
 
-      const codes = readSpreadsheet(codesFile.buffer)
-        .map(r => String(r[codesCol] ?? '').trim())
-        .filter(Boolean);
+      const rawCodeRows = readSpreadsheet(codesFile.buffer);
+      const codes = rawCodeRows.map(r => String(r[codesCol] ?? '').trim()).filter(Boolean);
+
+      // Warn if blank rows were dropped from the codes file (row-alignment risk)
+      const codesDropped = rawCodeRows.length - codes.length;
+      if (codesDropped > 0) {
+        warnings.push(`"${name}": ${codesDropped} empty row${codesDropped !== 1 ? 's' : ''} skipped in codes file — row order may not match your DJ list.`);
+      }
 
       if (codes.length < djList.length) {
         return res.status(400).json({
@@ -433,11 +470,27 @@ app.post('/preview', previewUpload, (req, res) => {
     }
 
     const allEmails = releases.flatMap(r => r.emails);
-    res.json({ releases, allEmails, total: allEmails.length });
+    res.json({ releases, allEmails, total: allEmails.length, warnings });
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
 });
+
+// Errors that mean retrying further emails won't help — abort the batch.
+const FATAL_SEND_ERRORS = [
+  'token refresh failed',
+  'not authorized with gmail',
+  'invalid_grant',
+  'daily limit exceeded',
+  'user rate limit exceeded',
+  'insufficient authentication scopes',
+  'request had invalid authentication credentials',
+];
+
+function isFatalSendError(message) {
+  const lower = message.toLowerCase();
+  return FATAL_SEND_ERRORS.some(pat => lower.includes(pat));
+}
 
 // ── Send ───────────────────────────────────────────────────────────────────
 app.post('/send', async (req, res) => {
@@ -447,13 +500,22 @@ app.post('/send', async (req, res) => {
   if (!emails?.length) return res.status(400).json({ error: 'No emails to send' });
 
   const sent = [], failed = [];
-  for (const item of emails) {
+  for (let i = 0; i < emails.length; i++) {
+    const item = emails[i];
     try {
       const token = await getAccessToken();
       await sendGmail(token, gmail_user, item.email, item.subject, item.body);
       sent.push(item.email);
     } catch (e) {
       failed.push({ email: item.email, error: e.message });
+      // Auth failures and quota errors won't resolve by retrying — abort the
+      // rest of the batch immediately rather than accumulating identical failures.
+      if (isFatalSendError(e.message)) {
+        for (let j = i + 1; j < emails.length; j++) {
+          failed.push({ email: emails[j].email, error: 'Aborted — see previous error' });
+        }
+        return res.json({ sent, failed, aborted: true, abortReason: e.message });
+      }
     }
   }
   res.json({ sent, failed });

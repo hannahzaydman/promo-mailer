@@ -44,18 +44,35 @@ function htmlToPlainText(html) {
 
 /**
  * Substitute {name} and {code} placeholders in a template string.
- * Both values are HTML-escaped before insertion to prevent injection
- * into the email body.
+ *
+ * Values inside href/src attribute values are URL-encoded (so that names or
+ * codes with spaces or special characters don't break URLs in links).
+ * All remaining occurrences are HTML-escaped to prevent injection into the
+ * email body text.
+ *
+ * @param {string} template - HTML template string (may contain {name}/{code})
+ * @param {string} name     - DJ display name
+ * @param {string} code     - Bandcamp download code
+ * @returns {string}
  */
 function applyTemplate(template, name, code) {
-  return template
+  // First pass: replace placeholders inside href/src="..." with URL-encoded values
+  const urlEncoded = template.replace(/(href|src)="([^"]*)"/gi, (match, attr, urlVal) => {
+    const replaced = urlVal
+      .replace(/\{name\}/g, encodeURIComponent(name))
+      .replace(/\{code\}/g, encodeURIComponent(code));
+    return `${attr}="${replaced}"`;
+  });
+  // Second pass: replace remaining occurrences with HTML-escaped values
+  return urlEncoded
     .replace(/\{name\}/g, escHtml(name))
     .replace(/\{code\}/g, escHtml(code));
 }
 
 /**
- * Map spreadsheet rows to {name, email} objects and filter out any row
- * that is missing either value after trimming whitespace.
+ * Map spreadsheet rows to {name, email} objects and filter out any row that is
+ * missing either value after trimming whitespace, or whose email doesn't
+ * contain '@' (catches Excel number/date-formatted cells misconstrued as emails).
  *
  * @param {object[]} rows     - Parsed spreadsheet rows (from XLSX.utils.sheet_to_json)
  * @param {string}   nameCol  - Column name to use as the DJ's display name
@@ -68,7 +85,7 @@ function parseDjList(rows, nameCol, emailCol) {
       name:  String(r[nameCol]  ?? '').trim(),
       email: String(r[emailCol] ?? '').trim(),
     }))
-    .filter(r => r.name && r.email);
+    .filter(r => r.name && r.email && r.email.includes('@'));
 }
 
 module.exports = { escHtml, sanitizeMimeHeader, htmlToPlainText, applyTemplate, parseDjList };

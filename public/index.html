@@ -445,6 +445,58 @@
     .auth-status.authorized { color: var(--success); }
     .auth-status.unauthorized { color: var(--muted); }
 
+    /* ── Rich text editor ────────────────────────────────────────────────────── */
+    .rich-editor {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    .rich-editor:focus-within {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 1px;
+      padding: 5px 8px;
+      background: var(--surface2);
+      border-bottom: 1px solid var(--border);
+    }
+    .tool-btn {
+      background: none;
+      border: none;
+      color: var(--text-secondary);
+      cursor: pointer;
+      padding: 5px 8px;
+      border-radius: 5px;
+      font-family: inherit;
+      font-size: 0.82rem;
+      line-height: 1;
+      transition: background 0.15s, color 0.15s;
+      flex-shrink: 0;
+    }
+    .tool-btn:hover { background: var(--border); color: var(--text); }
+    .tool-btn.active { background: var(--border); color: var(--accent); }
+    .toolbar-sep { width: 1px; height: 16px; background: var(--border); margin: 0 4px; flex-shrink: 0; }
+    .rich-body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: inherit;
+      font-size: 0.91rem;
+      line-height: 1.6;
+      padding: 10px 14px;
+      min-height: 130px;
+      outline: none;
+    }
+    .rich-body:empty::before {
+      content: attr(data-placeholder);
+      color: var(--muted);
+      pointer-events: none;
+    }
+    .rich-body a { color: var(--accent); }
+
     .hidden { display: none !important; }
     #step1, #step2, #step3 { display: none; }
     #step1.active, #step2.active, #step3.active { display: block; }
@@ -640,6 +692,64 @@
     } catch(e) { showError('step1-error', 'Could not read file.'); }
   });
 
+  // ── Rich text editor ──────────────────────────────────────────────────────
+  function initEditor(id) {
+    const toolbar = document.getElementById(`toolbar-${id}`);
+    if (!toolbar) return;
+
+    // Prevent toolbar clicks from stealing focus from the editor
+    toolbar.addEventListener('mousedown', e => e.preventDefault());
+
+    // Format commands (bold/italic/underline)
+    toolbar.querySelectorAll('[data-cmd]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.execCommand(btn.dataset.cmd, false, null);
+        document.getElementById(`body-${id}`)?.focus();
+      });
+    });
+
+    // Link button
+    const linkBtn = toolbar.querySelector('.link-btn');
+    if (linkBtn) {
+      linkBtn.addEventListener('click', () => {
+        const editor = document.getElementById(`body-${linkBtn.dataset.id}`);
+        if (!editor) return;
+        editor.focus();
+        const sel = window.getSelection();
+        const hasSelection = sel && !sel.isCollapsed;
+        const savedRange = hasSelection ? sel.getRangeAt(0).cloneRange() : null;
+        const url = prompt('Enter URL (e.g. https://bandcamp.com/...)');
+        if (!url) return;
+        const href = url.startsWith('http') ? url : 'https://' + url;
+        if (savedRange) {
+          sel.removeAllRanges();
+          sel.addRange(savedRange);
+        } else {
+          // No selection — insert link text
+          document.execCommand('insertHTML', false, `<a href="${esc(href)}">${esc(href)}</a>`);
+          return;
+        }
+        document.execCommand('createLink', false, href);
+        // Ensure links open in new tab
+        editor.querySelectorAll('a').forEach(a => {
+          a.target = '_blank';
+          a.rel = 'noopener noreferrer';
+        });
+      });
+    }
+  }
+
+  // Update toolbar active states on selection change
+  document.addEventListener('selectionchange', () => {
+    const editor = document.activeElement;
+    if (!editor?.classList.contains('rich-body')) return;
+    const toolbar = editor.closest('.rich-editor')?.querySelector('.toolbar');
+    if (!toolbar) return;
+    toolbar.querySelectorAll('[data-cmd]').forEach(btn => {
+      try { btn.classList.toggle('active', document.queryCommandState(btn.dataset.cmd)); } catch(e) {}
+    });
+  });
+
   // ── Step 2: Release management ────────────────────────────────────────────
   function createRelease() {
     const id = releaseIdCounter++;
@@ -679,12 +789,23 @@
         </div>
         <div class="field">
           <label>Email Body</label>
-          <textarea id="body-${id}" placeholder="Hi {name},&#10;&#10;Here's your download code: {code}&#10;&#10;Enjoy!"></textarea>
+          <div class="rich-editor" id="editor-wrap-${id}">
+            <div class="toolbar" id="toolbar-${id}">
+              <button type="button" class="tool-btn" data-cmd="bold" title="Bold"><b>B</b></button>
+              <button type="button" class="tool-btn" data-cmd="italic" title="Italic"><i>I</i></button>
+              <button type="button" class="tool-btn" data-cmd="underline" title="Underline"><u>U</u></button>
+              <div class="toolbar-sep"></div>
+              <button type="button" class="tool-btn link-btn" data-id="${id}" title="Insert link">&#128279; Link</button>
+            </div>
+            <div class="rich-body" id="body-${id}" contenteditable="true" spellcheck="true"
+              data-placeholder="Hi {name}, here's your download code: {code}"></div>
+          </div>
         </div>
       </div>
     `;
     container.appendChild(wrap);
     syncRemoveButtons();
+    initEditor(id);
   }
 
   function removeRelease(id) {
@@ -746,11 +867,12 @@
 
     for (let i = 0; i < releases.length; i++) {
       const r = releases[i];
-      const subject = document.getElementById(`subject-${r.id}`)?.value.trim();
-      const body    = document.getElementById(`body-${r.id}`)?.value.trim();
-      if (!r.file)   return showError('step2-error', `Release ${i+1}: upload a codes file.`);
-      if (!subject)  return showError('step2-error', `Release ${i+1}: subject line is empty.`);
-      if (!body)     return showError('step2-error', `Release ${i+1}: email body is empty.`);
+      const subject  = document.getElementById(`subject-${r.id}`)?.value.trim();
+      const bodyEl   = document.getElementById(`body-${r.id}`);
+      const bodyText = bodyEl?.innerText.trim();
+      if (!r.file)    return showError('step2-error', `Release ${i+1}: upload a codes file.`);
+      if (!subject)   return showError('step2-error', `Release ${i+1}: subject line is empty.`);
+      if (!bodyText)  return showError('step2-error', `Release ${i+1}: email body is empty.`);
     }
 
     const fd = new FormData();
@@ -763,7 +885,7 @@
       fd.append(`codes_file_${i}`, r.file);
       fd.append(`codes_col_${i}`, document.getElementById(`codes-col-${r.id}`).value);
       fd.append(`subject_${i}`,   document.getElementById(`subject-${r.id}`).value);
-      fd.append(`body_${i}`,      document.getElementById(`body-${r.id}`).value);
+      fd.append(`body_${i}`,      document.getElementById(`body-${r.id}`).innerHTML);
       const name = document.getElementById(`release-name-${r.id}`).value.trim();
       fd.append(`release_name_${i}`, name || `Release ${i+1}`);
     });
@@ -826,9 +948,13 @@
             <span class="ec-code">${esc(e.code)}</span>
           </div>
           <div class="ec-subject">Subject: ${esc(e.subject)}</div>
-          <div class="ec-body" id="${uid}">${esc(e.body)}</div>
+          <div class="ec-body" id="${uid}"></div>
           <button class="expand-btn" onclick="toggleBody('${uid}',this)">Show more</button>
         `;
+        // Set body HTML directly (values already server-escaped; links get safe target)
+        const bodyEl = card.querySelector('.ec-body');
+        bodyEl.innerHTML = e.body;
+        bodyEl.querySelectorAll('a').forEach(a => { a.target = '_blank'; a.rel = 'noopener noreferrer'; });
         emailList.appendChild(card);
       });
 

@@ -285,12 +285,39 @@ async function getAccessToken() {
   return oauthConfig.tokens.access_token;
 }
 
-async function sendGmail(accessToken, from, to, subject, body) {
-  const raw = Buffer.from(
-    [`From: ${from}`, `To: ${to}`, `Subject: ${subject}`,
-     'MIME-Version: 1.0', 'Content-Type: text/plain; charset=UTF-8', '', body]
-    .join('\r\n')
-  ).toString('base64url');
+async function sendGmail(accessToken, from, to, subject, htmlBody) {
+  const boundary = 'mp_' + Date.now().toString(36);
+
+  // Plain text fallback: strip HTML tags
+  const textBody = htmlBody
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, ' ')
+    .trim();
+
+  const mime = [
+    `From: ${from}`,
+    `To: ${to}`,
+    `Subject: ${subject}`,
+    'MIME-Version: 1.0',
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    '',
+    `--${boundary}`,
+    'Content-Type: text/plain; charset=UTF-8',
+    '',
+    textBody,
+    '',
+    `--${boundary}`,
+    'Content-Type: text/html; charset=UTF-8',
+    '',
+    `<!DOCTYPE html><html><body style="font-family:sans-serif;font-size:14px;line-height:1.6;color:#333;max-width:600px">${htmlBody}</body></html>`,
+    '',
+    `--${boundary}--`,
+  ].join('\r\n');
+
+  const raw = Buffer.from(mime).toString('base64url');
 
   const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
     method:  'POST',
@@ -302,6 +329,14 @@ async function sendGmail(accessToken, from, to, subject, body) {
     const err = await res.json();
     throw new Error(err.error?.message || `HTTP ${res.status}`);
   }
+}
+
+function escHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 // ── Spreadsheet endpoints ──────────────────────────────────────────────────
@@ -368,7 +403,7 @@ app.post('/preview', previewUpload, (req, res) => {
         count: djList.length,
         emails: djList.map((dj, j) => {
           const code    = codes[j];
-          const replace = s => s.replace(/\{name\}/g, dj.name).replace(/\{code\}/g, code);
+          const replace = s => s.replace(/\{name\}/g, escHtml(dj.name)).replace(/\{code\}/g, escHtml(code));
           return { name: dj.name, email: dj.email, code, subject: replace(subject), body: replace(body), release: name };
         }),
       });

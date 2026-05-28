@@ -56,9 +56,9 @@ const GOOGLE_CLIENT_ID     = process.env.GOOGLE_CLIENT_ID;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
 
 // ── Rate limiters ──────────────────────────────────────────────────────────
-// 5 send requests per session per minute.  Keyed on session ID so each
+// 200 send requests per session per minute.  Keyed on session ID so each
 // authenticated user has an independent quota.
-const sendRateLimiter = new RateLimiter(5, 60_000);
+const sendRateLimiter = new RateLimiter(200, 60_000);
 // Prune stale entries every 5 minutes to prevent unbounded Map growth.
 setInterval(() => sendRateLimiter.prune(), 5 * 60_000).unref();
 

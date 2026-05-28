@@ -36,19 +36,25 @@
 
     /* ── Header ─────────────────────────────────────────────────────────────── */
     header {
-      text-align: center;
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: center;
       margin-bottom: 56px;
-      position: relative;
     }
     header::after {
       content: '';
       display: block;
+      grid-column: 1 / -1;
       width: 100%;
       max-width: 700px;
       height: 1px;
       background: linear-gradient(90deg, transparent, var(--accent), transparent);
       margin: 24px auto 0;
       opacity: 0.5;
+    }
+    .header-center {
+      text-align: center;
+      grid-column: 2;
     }
     .header-logo {
       display: inline-flex;
@@ -65,11 +71,9 @@
       image-rendering: auto;
     }
     .header-aside {
-      position: absolute;
-      right: 0;
-      top: 50%;
-      transform: translateY(-50%);
+      grid-column: 3;
       text-align: right;
+      align-self: center;
     }
     .header-byline {
       font-size: 0.65rem;
@@ -692,26 +696,19 @@
     #step1, #step2, #step3 { display: none; }
     #step1.active, #step2.active, #step3.active { display: block; }
 
-    /* ── Responsive header ──────────────────────────────────────────────────── */
-    @media (max-width: 680px) {
-      .header-aside {
-        position: static;
-        transform: none;
-        text-align: center;
-        margin-top: 16px;
-      }
-      .header-social {
-        justify-content: center;
-      }
-      .header-byline {
-        text-align: center;
-      }
-    }
   </style>
 </head>
 <body>
 
 <header>
+  <div></div>
+  <div class="header-center">
+    <img src="https://f4.bcbits.com/img/0042095815_10.jpg" class="label-logo" alt="Midnight Ecstasy" />
+    <div class="header-logo">
+      <h1>Promo Mailer</h1>
+    </div>
+    <p>Upload · Compose · Send</p>
+  </div>
   <div class="header-aside">
     <div class="header-byline">a tool by <a href="https://midnightecstasy.bandcamp.com" target="_blank" rel="noopener noreferrer">midnight ecstasy</a></div>
     <div class="header-social">
@@ -724,11 +721,6 @@
       <a href="/auth/logout" id="logout-link">Sign out</a>
     </div>
   </div>
-  <img src="https://f4.bcbits.com/img/0042095815_10.jpg" class="label-logo" alt="Midnight Ecstasy" />
-  <div class="header-logo">
-    <h1>Promo Mailer</h1>
-  </div>
-  <p>Upload · Compose · Send</p>
 </header>
 
 <div class="steps">

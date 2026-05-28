@@ -114,7 +114,7 @@ const LOGIN_PAGE = (msg = '') => `<!DOCTYPE html>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
   body{background:#0c0b10;color:#f0eef8;font-family:'Syne',sans-serif;
-       display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:20px}
+       display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:40px 20px;gap:24px}
   .card{background:#131118;border:1px solid #2a2635;padding:40px 36px;
         text-align:center;max-width:360px;width:100%}
   .logo{width:64px;height:64px;object-fit:cover;display:block;margin:0 auto 20px}
@@ -127,7 +127,7 @@ const LOGIN_PAGE = (msg = '') => `<!DOCTYPE html>
     transition:background .15s}
   a:hover{background:#6673ff}
   .err{color:#ff4455;font-size:.78rem;margin-top:16px;letter-spacing:.04em}
-  footer{margin-top:32px;font-size:.6rem;letter-spacing:.18em;text-transform:uppercase;color:#4d4a5a}
+  footer{font-size:.6rem;letter-spacing:.18em;text-transform:uppercase;color:#4d4a5a}
 </style></head>
 <body><div class="card">
   <img src="https://f4.bcbits.com/img/0042095815_10.jpg" class="logo" alt="Midnight Ecstasy" />

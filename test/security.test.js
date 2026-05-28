@@ -1,17 +1,20 @@
 'use strict';
 
 /**
- * Tests for the three security fixes applied during the audit:
+ * Security hardening tests:
  *   1. OAuth CSRF — state parameter generation and validation logic
  *   2. ALLOWED_DOMAIN regex injection — domain escaping
  *   3. Column validation — validateColumns() guards in /preview
  *   4. fetchWithTimeout — aborts stalled Google API calls
+ *   5. RateLimiter — sliding-window in-memory rate limiter
+ *   6. validateInputLengths — field length enforcement
+ *   7. redactCredentials — strips passwords from error messages
  */
 
 const { describe, test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('http');
-const { validateColumns } = require('../utils');
+const { validateColumns, RateLimiter, validateInputLengths, redactCredentials } = require('../utils');
 
 // ── 1. validateColumns ────────────────────────────────────────────────────────
 
@@ -166,6 +169,168 @@ describe('OAuth CSRF state validation logic', () => {
     const real = 'abc123';
     const attacker = real + 'extra';
     assert.equal(shouldReject(attacker, real), true);
+  });
+});
+
+// ── 5. RateLimiter ────────────────────────────────────────────────────────────
+
+describe('RateLimiter', () => {
+  test('allows requests up to the limit', () => {
+    const rl = new RateLimiter(3, 60_000);
+    assert.equal(rl.isAllowed('key1'), true);
+    assert.equal(rl.isAllowed('key1'), true);
+    assert.equal(rl.isAllowed('key1'), true);
+  });
+
+  test('blocks the request that exceeds the limit', () => {
+    const rl = new RateLimiter(3, 60_000);
+    rl.isAllowed('key1');
+    rl.isAllowed('key1');
+    rl.isAllowed('key1');
+    assert.equal(rl.isAllowed('key1'), false);
+  });
+
+  test('different keys have independent quotas', () => {
+    const rl = new RateLimiter(1, 60_000);
+    assert.equal(rl.isAllowed('alice'), true);
+    assert.equal(rl.isAllowed('alice'), false);
+    assert.equal(rl.isAllowed('bob'),   true); // bob has a fresh quota
+  });
+
+  test('requests outside the window do not count', () => {
+    // Use a 50ms window so we can wait it out in the test
+    const rl = new RateLimiter(2, 50);
+    rl.isAllowed('key');
+    rl.isAllowed('key');
+    assert.equal(rl.isAllowed('key'), false, 'should be blocked within window');
+
+    return new Promise((resolve) => setTimeout(() => {
+      // After the window expires the slate is clean
+      assert.equal(rl.isAllowed('key'), true, 'should be allowed after window expires');
+      resolve();
+    }, 60));
+  });
+
+  test('prune() removes entries with no recent hits', () => {
+    const rl = new RateLimiter(5, 50);
+    rl.isAllowed('temp');
+    return new Promise((resolve) => setTimeout(() => {
+      assert.equal(rl._store.has('temp'), true, 'entry exists before prune');
+      rl.prune();
+      assert.equal(rl._store.has('temp'), false, 'entry removed after prune when window expired');
+      resolve();
+    }, 60));
+  });
+
+  test('prune() keeps entries that still have hits in the window', () => {
+    const rl = new RateLimiter(5, 60_000);
+    rl.isAllowed('active');
+    rl.prune();
+    assert.equal(rl._store.has('active'), true, 'active entry survives prune');
+  });
+
+  test('limit of 0 blocks every request', () => {
+    const rl = new RateLimiter(0, 60_000);
+    assert.equal(rl.isAllowed('key'), false);
+  });
+});
+
+// ── 6. validateInputLengths ───────────────────────────────────────────────────
+
+describe('validateInputLengths', () => {
+  test('returns null when all fields are within limits', () => {
+    assert.equal(
+      validateInputLengths({
+        from_name: { value: 'DJ Phantom', max: 200 },
+        smtp_host: { value: 'smtp.example.com', max: 253 },
+      }),
+      null
+    );
+  });
+
+  test('returns an error string when a field exceeds its max', () => {
+    const err = validateInputLengths({ subject: { value: 'x'.repeat(999), max: 998 } });
+    assert.ok(err, 'should return an error string');
+    assert.ok(err.includes('"subject"'), 'error names the field');
+    assert.ok(err.includes('998'), 'error states the limit');
+    assert.ok(err.includes('999'), 'error states the actual length');
+  });
+
+  test('reports the first violating field when multiple are over-length', () => {
+    const err = validateInputLengths({
+      a: { value: 'x'.repeat(6), max: 5 },
+      b: { value: 'y'.repeat(6), max: 5 },
+    });
+    assert.ok(err.includes('"a"'), 'should report the first field');
+    assert.ok(!err.includes('"b"'), 'should not mention subsequent fields');
+  });
+
+  test('null and undefined values are ignored (not required-field check)', () => {
+    assert.equal(validateInputLengths({ smtp_pass: { value: null,      max: 256 } }), null);
+    assert.equal(validateInputLengths({ smtp_pass: { value: undefined, max: 256 } }), null);
+  });
+
+  test('empty string is always within limit', () => {
+    assert.equal(validateInputLengths({ field: { value: '', max: 0 } }), null);
+  });
+
+  test('value exactly at the max is allowed', () => {
+    assert.equal(validateInputLengths({ field: { value: 'x'.repeat(100), max: 100 } }), null);
+  });
+
+  test('value one character over the max is rejected', () => {
+    const err = validateInputLengths({ field: { value: 'x'.repeat(101), max: 100 } });
+    assert.ok(err, 'should reject value of length 101 against max 100');
+  });
+
+  test('coerces non-string values to string before measuring length', () => {
+    // Numbers might arrive from form bodies as strings anyway, but be safe.
+    assert.equal(validateInputLengths({ n: { value: 12345, max: 5 } }), null);  // '12345' = 5 chars
+    const err = validateInputLengths({ n: { value: 123456, max: 5 } });
+    assert.ok(err, 'should reject "123456" (6 chars) against max 5');
+  });
+});
+
+// ── 7. redactCredentials ──────────────────────────────────────────────────────
+
+describe('redactCredentials', () => {
+  test('replaces the secret in the middle of a message', () => {
+    const result = redactCredentials('Login failed: user:hunter2', 'hunter2');
+    assert.equal(result, 'Login failed: user:[REDACTED]');
+  });
+
+  test('replaces all occurrences of the secret', () => {
+    const result = redactCredentials('bad pass: s3cr3t (tried s3cr3t twice)', 's3cr3t');
+    assert.equal(result, 'bad pass: [REDACTED] (tried [REDACTED] twice)');
+  });
+
+  test('multiple secrets are all redacted', () => {
+    const result = redactCredentials('user=alice pass=pw123', 'alice', 'pw123');
+    assert.equal(result, 'user=[REDACTED] pass=[REDACTED]');
+  });
+
+  test('message with no secret is returned unchanged', () => {
+    assert.equal(redactCredentials('Connection timeout', 'hunter2'), 'Connection timeout');
+  });
+
+  test('falsy secrets (empty string, null, undefined) are skipped', () => {
+    assert.equal(redactCredentials('some error', '', null, undefined), 'some error');
+  });
+
+  test('handles passwords containing regex special characters', () => {
+    const pass = 'p@$$w0rd.*+?[]{}()^|\\';
+    const msg  = `SMTP auth error: user:${pass}`;
+    const result = redactCredentials(msg, pass);
+    assert.equal(result, 'SMTP auth error: user:[REDACTED]');
+  });
+
+  test('coerces a non-string message without throwing', () => {
+    assert.equal(redactCredentials(null, 'secret'), 'null');
+    assert.equal(redactCredentials(42,   'secret'), '42');
+  });
+
+  test('coerces a non-string secret without throwing', () => {
+    assert.doesNotThrow(() => redactCredentials('msg', 42));
   });
 });
 

@@ -88,6 +88,81 @@ function parseRecipientList(rows, nameCol, emailCol) {
     .filter(r => r.name && r.email && r.email.includes('@'));
 }
 
+/**
+ * Sliding-window in-memory rate limiter.
+ *
+ * Keeps a list of request timestamps per key, prunes those outside the window,
+ * and rejects when the count reaches maxRequests. Safe to use with session IDs
+ * or IP addresses as the key.
+ */
+class RateLimiter {
+  constructor(maxRequests, windowMs) {
+    this.maxRequests = maxRequests;
+    this.windowMs    = windowMs;
+    this._store      = new Map(); // key → [timestamp, ...]
+  }
+
+  /** Returns true if the request is allowed; false if the caller is rate-limited. */
+  isAllowed(key) {
+    const now    = Date.now();
+    const cutoff = now - this.windowMs;
+    const hits   = (this._store.get(key) || []).filter(t => t > cutoff);
+    if (hits.length >= this.maxRequests) {
+      this._store.set(key, hits);
+      return false;
+    }
+    hits.push(now);
+    this._store.set(key, hits);
+    return true;
+  }
+
+  /** Remove expired entries for all keys. Call periodically to prevent unbounded growth. */
+  prune() {
+    const cutoff = Date.now() - this.windowMs;
+    for (const [key, hits] of this._store) {
+      const fresh = hits.filter(t => t > cutoff);
+      if (fresh.length === 0) this._store.delete(key);
+      else this._store.set(key, fresh);
+    }
+  }
+}
+
+/**
+ * Validate that string fields do not exceed their maximum allowed lengths.
+ *
+ * @param {object} fields - { label: { value, max } }
+ * @returns {string|null}  First violation as an error message, or null.
+ */
+function validateInputLengths(fields) {
+  for (const [label, { value, max }] of Object.entries(fields)) {
+    if (value != null && String(value).length > max) {
+      return `"${label}" exceeds the maximum length of ${max} characters (got ${String(value).length}).`;
+    }
+  }
+  return null;
+}
+
+/**
+ * Redact sensitive values (passwords, tokens) from an error message before it
+ * is logged or returned to the client.
+ *
+ * Uses split/join rather than a regex so that regex-special characters in
+ * passwords (e.g. `.`, `*`, `(`) cannot cause a RegExp error.
+ *
+ * @param {string}    msg     - Error message that may contain a secret
+ * @param {...string} secrets - Values to redact (falsy values are skipped)
+ * @returns {string}
+ */
+function redactCredentials(msg, ...secrets) {
+  let s = String(msg);
+  for (const secret of secrets) {
+    if (secret && String(secret).length > 0) {
+      s = s.split(String(secret)).join('[REDACTED]');
+    }
+  }
+  return s;
+}
+
 // Errors that mean retrying further emails won't help — abort the batch.
 const FATAL_SMTP_ERRORS = [
   'invalid login',
@@ -125,4 +200,4 @@ function validateColumns(rows, required, context) {
   return null;
 }
 
-module.exports = { escHtml, sanitizeMimeHeader, htmlToPlainText, applyTemplate, parseRecipientList, isFatalSmtpError , validateColumns };
+module.exports = { escHtml, sanitizeMimeHeader, htmlToPlainText, applyTemplate, parseRecipientList, isFatalSmtpError, validateColumns, RateLimiter, validateInputLengths, redactCredentials };

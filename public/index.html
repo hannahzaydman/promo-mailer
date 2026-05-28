@@ -752,7 +752,7 @@
     <div id="col-selectors" class="hidden">
       <div class="col-row">
         <div class="field">
-          <label>Name Column</label>
+          <label>Name Column <span style="color:var(--muted);font-weight:400;letter-spacing:0">(optional)</span></label>
           <select id="name-col"></select>
         </div>
         <div class="field">
@@ -765,7 +765,7 @@
     <div class="manual-recipients">
       <h3>Add Recipients Manually</h3>
       <div class="manual-entry-row">
-        <input type="text" id="manual-name" placeholder="Name" maxlength="200" />
+        <input type="text" id="manual-name" placeholder="Name (optional)" maxlength="200" />
         <input type="email" id="manual-email" placeholder="Email" maxlength="320" />
         <button class="btn btn-secondary" id="manual-add-btn">Add</button>
       </div>
@@ -865,6 +865,9 @@
     <div id="retry-wrap" style="display:none;margin-top:12px">
       <button class="btn btn-secondary" id="retry-btn"></button>
     </div>
+    <div id="export-unused-wrap" style="display:none;margin-top:12px">
+      <button class="btn btn-secondary" id="export-unused-btn" style="padding:7px 14px;font-size:0.72rem">Export Unused Codes</button>
+    </div>
   </div>
 </div>
 
@@ -874,6 +877,7 @@
   let releaseIdCounter = 0;
   let allEmailsToSend = [];
   let manualRecipients = [];
+  let unusedCodesByRelease = {};
 
   // ── Step 1 ────────────────────────────────────────────────────────────────
   document.getElementById('recipient-file').addEventListener('change', async (e) => {
@@ -886,7 +890,7 @@
       const res = await fetch('/get-columns', { method: 'POST', body: fd });
       const data = await res.json();
       if (data.error) { showError('step1-error', data.error); return; }
-      populateSelect('name-col', data.columns, autoGuess(data.columns, ['name','artist','dj','recipient','first']));
+      populateNameColSelect(data.columns);
       populateSelect('email-col', data.columns, autoGuess(data.columns, ['email','e-mail','mail']));
       document.getElementById('col-selectors').classList.remove('hidden');
       updateStep1State();
@@ -906,7 +910,7 @@
     const tbody = document.getElementById('manual-recipients-body');
     tbody.innerHTML = manualRecipients.map((r, i) => `
       <tr>
-        <td class="td-name">${esc(r.name)}</td>
+        <td class="td-name">${r.name ? esc(r.name) : '<span style="color:var(--muted);font-style:italic">—</span>'}</td>
         <td>${esc(r.email)}</td>
         <td><button class="btn-remove-row" data-idx="${i}" title="Remove">&times;</button></td>
       </tr>
@@ -926,7 +930,6 @@
     const emailEl = document.getElementById('manual-email');
     const name    = nameEl.value.trim();
     const email   = emailEl.value.trim();
-    if (!name)  { nameEl.focus(); return; }
     if (!email || !email.includes('@')) { emailEl.focus(); return; }
     manualRecipients.push({ name, email });
     nameEl.value  = '';
@@ -940,7 +943,7 @@
     if (e.key === 'Enter') { e.preventDefault(); document.getElementById('manual-add-btn').click(); }
   });
   document.getElementById('manual-name').addEventListener('keydown', e => {
-    if (e.key === 'Enter') { e.preventDefault(); document.getElementById('manual-email').focus(); }
+    if (e.key === 'Enter') { e.preventDefault(); document.getElementById('manual-email').value.trim() ? document.getElementById('manual-add-btn').click() : document.getElementById('manual-email').focus(); }
   });
 
   document.getElementById('export-recipients-btn').addEventListener('click', () => {
@@ -1292,6 +1295,8 @@
       const data = await res.json();
       if (data.error) { showError('step2-error', data.error); return; }
       allEmailsToSend = data.allEmails;
+      unusedCodesByRelease = data.unusedCodesByRelease || {};
+      document.getElementById('export-unused-btn').style.display = 'none';
       renderPreview(data.releases, data.total);
       showWarnings(data.warnings);
       goTo(3);
@@ -1481,6 +1486,9 @@
       document.getElementById('retry-wrap').style.display = 'block';
     }
 
+    const hasUnused = Object.values(unusedCodesByRelease).some(codes => codes.length > 0);
+    document.getElementById('export-unused-wrap').style.display = hasUnused ? 'block' : 'none';
+
     setSendUIBusy(false);
   });
 
@@ -1557,6 +1565,23 @@
   });
 
   // ── Helpers ───────────────────────────────────────────────────────────────
+  function populateNameColSelect(columns) {
+    const sel = document.getElementById('name-col');
+    if (!sel) return;
+    sel.innerHTML = '';
+    // Add a "no name" sentinel first
+    const none = document.createElement('option');
+    none.value = '__none__'; none.textContent = '— no name column —';
+    sel.appendChild(none);
+    const guessed = autoGuess(columns, ['name','artist','dj','recipient','first']);
+    columns.forEach(col => {
+      const o = document.createElement('option');
+      o.value = col; o.textContent = col;
+      if (col === guessed) o.selected = true;
+      sel.appendChild(o);
+    });
+  }
+
   function populateSelect(id, options, selected) {
     const sel = document.getElementById(id);
     if (!sel) return;
@@ -1614,6 +1639,27 @@
   }
 
   document.getElementById('export-csv-btn').addEventListener('click', exportCsv);
+
+  function exportUnusedCodes() {
+    const rows = [];
+    for (const [release, codes] of Object.entries(unusedCodesByRelease)) {
+      for (const code of codes) {
+        rows.push([release, code]);
+      }
+    }
+    if (!rows.length) return;
+    const header = ['Release', 'Unused Code'];
+    const csv = [header, ...rows]
+      .map(row => row.map(cell => `"${String(cell ?? '').replace(/"/g, '""')}"`).join(','))
+      .join('\r\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = 'unused-codes.csv'; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  document.getElementById('export-unused-btn').addEventListener('click', exportUnusedCodes);
 
   function esc(str) {
     return String(str)

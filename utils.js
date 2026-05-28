@@ -82,10 +82,10 @@ function applyTemplate(template, name, code) {
 function parseRecipientList(rows, nameCol, emailCol) {
   return rows
     .map(r => ({
-      name:  String(r[nameCol]  ?? '').trim(),
+      name:  nameCol ? String(r[nameCol] ?? '').trim() : '',
       email: String(r[emailCol] ?? '').trim(),
     }))
-    .filter(r => r.name && r.email && r.email.includes('@'));
+    .filter(r => r.email && r.email.includes('@'));
 }
 
 /**

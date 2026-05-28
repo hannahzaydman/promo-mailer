@@ -367,9 +367,9 @@ app.post('/preview', previewUpload, (req, res) => {
         const parsed = JSON.parse(req.body.extra_recipients);
         if (Array.isArray(parsed)) {
           extraRecipients = parsed
-            .filter(r => r && typeof r.name === 'string' && typeof r.email === 'string')
-            .map(r => ({ name: r.name.trim(), email: r.email.trim() }))
-            .filter(r => r.name && r.email && r.email.includes('@'));
+            .filter(r => r && typeof r.email === 'string')
+            .map(r => ({ name: typeof r.name === 'string' ? r.name.trim() : '', email: r.email.trim() }))
+            .filter(r => r.email && r.email.includes('@'));
         }
       } catch { /* ignore malformed JSON */ }
     }
@@ -386,14 +386,18 @@ app.post('/preview', previewUpload, (req, res) => {
       // Parse recipient list and warn if rows were silently dropped
       const rawRecipientRows = readSpreadsheet(recipientFileInfo.buffer);
 
-      const recipientColErr = validateColumns(rawRecipientRows, [name_col, email_col]);
+      const recipientColErr = validateColumns(rawRecipientRows, [email_col]);
       if (recipientColErr) return res.status(400).json({ error: 'Recipient file: ' + recipientColErr });
+      if (name_col && name_col !== '__none__') {
+        const nameColErr = validateColumns(rawRecipientRows, [name_col]);
+        if (nameColErr) return res.status(400).json({ error: 'Recipient file: ' + nameColErr });
+      }
 
-      const fromFile = parseRecipientList(rawRecipientRows, name_col, email_col);
+      const fromFile = parseRecipientList(rawRecipientRows, name_col && name_col !== '__none__' ? name_col : null, email_col);
 
       const dropped = rawRecipientRows.length - fromFile.length;
       if (dropped > 0) {
-        warnings.push(`${dropped} recipient row${dropped !== 1 ? 's' : ''} were skipped (blank, missing name/email, or invalid email format). If you prepared your codes file to align row-for-row, the assignment order may be off.`);
+        warnings.push(`${dropped} recipient row${dropped !== 1 ? 's' : ''} were skipped (blank or missing/invalid email). If you prepared your codes file to align row-for-row, the assignment order may be off.`);
       }
 
       recipientList = fromFile;
@@ -449,9 +453,12 @@ app.post('/preview', previewUpload, (req, res) => {
         });
       }
 
+      const unusedCodes = codes.slice(recipientList.length);
+
       releases.push({
         name,
         count: recipientList.length,
+        unusedCodes,
         emails: recipientList.map((recipient, j) => {
           const code = codes[j];
           return {
@@ -467,7 +474,10 @@ app.post('/preview', previewUpload, (req, res) => {
     }
 
     const allEmails = releases.flatMap(r => r.emails);
-    res.json({ releases, allEmails, total: allEmails.length, warnings });
+    const unusedCodesByRelease = Object.fromEntries(
+      releases.map(r => [r.name, r.unusedCodes])
+    );
+    res.json({ releases, allEmails, total: allEmails.length, warnings, unusedCodesByRelease });
   } catch (e) {
     res.status(400).json({ error: e.message });
   }

@@ -384,6 +384,7 @@ app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.ht
 
 app.post('/get-columns', upload.single('recipient_file'), (req, res) => {
   try {
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
     const rows = readSpreadsheet(req.file.buffer);
     if (!rows.length) return res.json({ error: 'File appears to be empty' });
     res.json({ columns: Object.keys(rows[0]) });
@@ -535,7 +536,7 @@ app.post('/send', async (req, res) => {
         if (isFatalGmailError(e.message)) {
           for (let j = i + 1; j < emails.length; j++)
             failed.push({ email: emails[j].email, error: 'Aborted — see previous error' });
-          return res.json({ sent, failed, aborted: true, abortReason: e.message });
+          return res.json({ sent, failed, aborted: true, abortReason: redactCredentials(e.message, GOOGLE_CLIENT_SECRET) });
         }
       }
     }
@@ -571,7 +572,7 @@ app.post('/send', async (req, res) => {
       if (isFatalSmtpError(e.message)) {
         for (let j = i + 1; j < emails.length; j++)
           failed.push({ email: emails[j].email, error: 'Aborted — see previous error' });
-        return res.json({ sent, failed, aborted: true, abortReason: e.message });
+        return res.json({ sent, failed, aborted: true, abortReason: redactCredentials(e.message, smtp_pass) });
       }
     }
   }

@@ -32,7 +32,7 @@ app.use((req, res, next) => {
   next();
 });
 
-const { escHtml, sanitizeMimeHeader, htmlToPlainText, applyTemplate, parseRecipientList, isFatalSmtpError, validateColumns, RateLimiter, validateInputLengths, redactCredentials } = require('./utils');
+const { escHtml, sanitizeMimeHeader, htmlToPlainText, applyTemplate, parseRecipientList, partitionCodes, isFatalSmtpError, validateColumns, RateLimiter, validateInputLengths, redactCredentials } = require('./utils');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
@@ -406,24 +406,55 @@ app.post('/preview', previewUpload, (req, res) => {
     if (count === 0) return res.status(400).json({ error: 'No releases provided' });
 
     const recipientFileInfo = req.files['recipient_file']?.[0];
-    if (!recipientFileInfo) return res.status(400).json({ error: 'Recipient file missing' });
+
+    // Parse extra (manually entered) recipients sent as JSON
+    let extraRecipients = [];
+    if (req.body.extra_recipients) {
+      try {
+        const parsed = JSON.parse(req.body.extra_recipients);
+        if (Array.isArray(parsed)) {
+          extraRecipients = parsed
+            .filter(r => r && typeof r.email === 'string')
+            .map(r => ({ name: typeof r.name === 'string' ? r.name.trim() : '', email: r.email.trim() }))
+            .filter(r => r.email && r.email.includes('@'));
+        }
+      } catch { /* ignore malformed JSON */ }
+    }
+
+    if (!recipientFileInfo && extraRecipients.length === 0) {
+      return res.status(400).json({ error: 'No recipients provided. Upload a recipient file or add recipients manually.' });
+    }
 
     const warnings = [];
+    let recipientList = [];
 
-    // Parse recipient list and warn if rows were silently dropped
-    const rawRecipientRows = readSpreadsheet(recipientFileInfo.buffer);
+    if (recipientFileInfo) {
+      // Parse recipient list and warn if rows were silently dropped
+      const rawRecipientRows = readSpreadsheet(recipientFileInfo.buffer);
 
-    const recipientColErr = validateColumns(rawRecipientRows, [name_col, email_col]);
-    if (recipientColErr) return res.status(400).json({ error: 'Recipient file: ' + recipientColErr });
+      const resolvedNameCol = name_col && name_col !== '__none__' ? name_col : null;
 
-    const recipientList = parseRecipientList(rawRecipientRows, name_col, email_col);
+      const recipientColErr = validateColumns(rawRecipientRows, [email_col]);
+      if (recipientColErr) return res.status(400).json({ error: 'Recipient file: ' + recipientColErr });
+      if (resolvedNameCol) {
+        const nameColErr = validateColumns(rawRecipientRows, [resolvedNameCol]);
+        if (nameColErr) return res.status(400).json({ error: 'Recipient file: ' + nameColErr });
+      }
 
-    if (!recipientList.length) return res.status(400).json({ error: 'No valid recipients found. Check that the correct name and email columns are selected, and that email addresses contain @.' });
+      const fromFile = parseRecipientList(rawRecipientRows, resolvedNameCol, email_col);
 
-    const dropped = rawRecipientRows.length - recipientList.length;
-    if (dropped > 0) {
-      warnings.push(`${dropped} recipient row${dropped !== 1 ? 's' : ''} were skipped (blank, missing name/email, or invalid email format). If you prepared your codes file to align row-for-row, the assignment order may be off.`);
+      const dropped = rawRecipientRows.length - fromFile.length;
+      if (dropped > 0) {
+        warnings.push(`${dropped} recipient row${dropped !== 1 ? 's' : ''} were skipped (blank or missing/invalid email). If you prepared your codes file to align row-for-row, the assignment order may be off.`);
+      }
+
+      recipientList = fromFile;
     }
+
+    // Append manually entered recipients
+    recipientList = recipientList.concat(extraRecipients);
+
+    if (!recipientList.length) return res.status(400).json({ error: 'No valid recipients found. Check that the correct email column is selected and that email addresses contain @.' });
 
     // Warn about duplicate email addresses in the recipient list
     const emailCount = {};
@@ -470,11 +501,14 @@ app.post('/preview', previewUpload, (req, res) => {
         });
       }
 
+      const { assigned: assignedCodes, unused: unusedCodes } = partitionCodes(codes, recipientList.length);
+
       releases.push({
         name,
         count: recipientList.length,
+        unusedCodes,
         emails: recipientList.map((recipient, j) => {
-          const code = codes[j];
+          const code = assignedCodes[j];
           return {
             name:    recipient.name,
             email:   recipient.email,
@@ -488,7 +522,8 @@ app.post('/preview', previewUpload, (req, res) => {
     }
 
     const allEmails = releases.flatMap(r => r.emails);
-    res.json({ releases, allEmails, total: allEmails.length, warnings });
+    const unusedCodesByRelease = Object.fromEntries(releases.map(r => [r.name, r.unusedCodes]));
+    res.json({ releases, allEmails, total: allEmails.length, warnings, unusedCodesByRelease });
   } catch (e) {
     res.status(400).json({ error: e.message });
   }

@@ -80,12 +80,28 @@ function applyTemplate(template, name, code) {
  * @returns {{ name: string, email: string }[]}
  */
 function parseRecipientList(rows, nameCol, emailCol) {
+  const useNameCol = nameCol && nameCol !== '__none__';
   return rows
     .map(r => ({
-      name:  String(r[nameCol]  ?? '').trim(),
+      name:  useNameCol ? String(r[nameCol] ?? '').trim() : '',
       email: String(r[emailCol] ?? '').trim(),
     }))
-    .filter(r => r.name && r.email && r.email.includes('@'));
+    .filter(r => r.email && r.email.includes('@'));
+}
+
+/**
+ * Partition a flat codes array into the slice assigned to recipients and the
+ * leftover (unused) slice.
+ *
+ * @param {string[]} codes          - Full list of codes from the uploaded file
+ * @param {number}   recipientCount - Number of recipients who will receive codes
+ * @returns {{ assigned: string[], unused: string[] }}
+ */
+function partitionCodes(codes, recipientCount) {
+  return {
+    assigned: codes.slice(0, recipientCount),
+    unused:   codes.slice(recipientCount),
+  };
 }
 
 /**
@@ -200,4 +216,4 @@ function validateColumns(rows, required, context) {
   return null;
 }
 
-module.exports = { escHtml, sanitizeMimeHeader, htmlToPlainText, applyTemplate, parseRecipientList, isFatalSmtpError, validateColumns, RateLimiter, validateInputLengths, redactCredentials };
+module.exports = { escHtml, sanitizeMimeHeader, htmlToPlainText, applyTemplate, parseRecipientList, partitionCodes, isFatalSmtpError, validateColumns, RateLimiter, validateInputLengths, redactCredentials };

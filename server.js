@@ -23,7 +23,7 @@ app.use((req, res, next) => {
     "script-src 'self' 'unsafe-inline'",
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "font-src https://fonts.gstatic.com",
-    "connect-src 'self'",
+    "connect-src 'self' https://accounts.google.com",
     "img-src 'self' data: https://f4.bcbits.com",
     "frame-ancestors 'none'",
     "object-src 'none'",
@@ -200,6 +200,150 @@ app.get('/auth/logout', (req, res) => {
 app.use(requireAuth);
 app.use(express.static(path.join(__dirname, 'public')));
 
+// ── Gmail send OAuth ───────────────────────────────────────────────────────
+// Separate OAuth flow for gmail.send scope — tokens live in the session only.
+// The same Google Cloud OAuth client is reused; add /auth/gmail/callback to
+// the "Authorized redirect URIs" in Google Cloud Console.
+
+app.post('/auth/gmail/setup', (req, res) => {
+  if (!GOOGLE_CLIENT_ID)
+    return res.status(501).json({ error: 'Google OAuth not configured.' });
+  const state = crypto.randomBytes(32).toString('hex');
+  req.session.gmailOAuthState = state;
+  const params = new URLSearchParams({
+    client_id:     GOOGLE_CLIENT_ID,
+    redirect_uri:  `${BASE_URL}/auth/gmail/callback`,
+    response_type: 'code',
+    scope:         'https://www.googleapis.com/auth/gmail.send',
+    access_type:   'offline',
+    prompt:        'consent',
+    state,
+  });
+  res.json({ authUrl: `https://accounts.google.com/o/oauth2/v2/auth?${params}` });
+});
+
+app.get('/auth/gmail/callback', async (req, res) => {
+  const { code, error, state } = req.query;
+  if (error) return res.send(`<script>window.opener?.postMessage('gmail-error','*');window.close();</script>`);
+
+  const expectedState = req.session.gmailOAuthState;
+  delete req.session.gmailOAuthState;
+  if (!state || !expectedState || state !== expectedState)
+    return res.send(`<script>window.opener?.postMessage('gmail-error','*');window.close();</script>`);
+
+  try {
+    const tokenRes = await fetchWithTimeout('https://oauth2.googleapis.com/token', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id:     GOOGLE_CLIENT_ID,
+        client_secret: GOOGLE_CLIENT_SECRET,
+        code,
+        grant_type:    'authorization_code',
+        redirect_uri:  `${BASE_URL}/auth/gmail/callback`,
+      }),
+    });
+    const tokens = await tokenRes.json();
+    if (tokens.error) throw new Error(tokens.error_description || tokens.error);
+    req.session.gmailTokens = {
+      access_token:  tokens.access_token,
+      refresh_token: tokens.refresh_token,
+      expiry:        Date.now() + (tokens.expires_in || 3600) * 1000,
+    };
+    res.send(`<script>window.opener?.postMessage('gmail-authorized','*');window.close();</script>`);
+  } catch (e) {
+    res.send(`<script>window.opener?.postMessage('gmail-error','*');window.close();</script>`);
+  }
+});
+
+app.get('/auth/gmail/status', (req, res) => {
+  res.json({
+    authorized: !!(req.session.gmailTokens?.access_token),
+    hasOAuth:   !!GOOGLE_CLIENT_ID,
+  });
+});
+
+app.post('/auth/gmail/revoke', (req, res) => {
+  delete req.session.gmailTokens;
+  res.json({ ok: true });
+});
+
+async function getGmailAccessToken(session) {
+  const t = session.gmailTokens;
+  if (!t) throw new Error('Gmail not authorized');
+  if (Date.now() < t.expiry - 60_000) return t.access_token;
+  if (!t.refresh_token) throw new Error('Gmail token expired — please sign in again');
+  const r = await fetchWithTimeout('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id:     GOOGLE_CLIENT_ID,
+      client_secret: GOOGLE_CLIENT_SECRET,
+      refresh_token: t.refresh_token,
+      grant_type:    'refresh_token',
+    }),
+  });
+  const data = await r.json();
+  if (data.error) throw new Error(data.error_description || data.error);
+  session.gmailTokens = {
+    access_token:  data.access_token,
+    refresh_token: t.refresh_token,
+    expiry:        Date.now() + (data.expires_in || 3600) * 1000,
+  };
+  return data.access_token;
+}
+
+async function sendViaGmail(accessToken, from, to, subject, htmlBody) {
+  const plain = htmlBody
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n\n')
+    .replace(/<[^>]+>/g, '')
+    .trim();
+
+  const mime = [
+    'MIME-Version: 1.0',
+    `From: ${from}`,
+    `To: ${to}`,
+    `Subject: ${subject}`,
+    'Content-Type: multipart/alternative; boundary="BOUNDARY"',
+    '',
+    '--BOUNDARY',
+    'Content-Type: text/plain; charset=UTF-8',
+    '',
+    plain,
+    '--BOUNDARY',
+    'Content-Type: text/html; charset=UTF-8',
+    '',
+    `<!DOCTYPE html><html><body style="font-family:sans-serif;font-size:14px;line-height:1.6;color:#333;max-width:600px">${htmlBody}</body></html>`,
+    '--BOUNDARY--',
+  ].join('\r\n');
+
+  const raw = Buffer.from(mime).toString('base64url');
+  const resp = await fetchWithTimeout(
+    'https://gmail.googleapis.com/gmail/v1/users/me/messages/send',
+    {
+      method:  'POST',
+      headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ raw }),
+    }
+  );
+  const data = await resp.json();
+  if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
+  return data;
+}
+
+const FATAL_GMAIL_ERRORS = [
+  'invalid_grant',
+  'token has been expired or revoked',
+  'invalid credentials',
+  'daily sending limit exceeded',
+  'user rate limit exceeded',
+];
+function isFatalGmailError(message) {
+  const lower = String(message).toLowerCase();
+  return FATAL_GMAIL_ERRORS.some(p => lower.includes(p));
+}
+
 // ── Spreadsheet endpoints ──────────────────────────────────────────────────
 function readSpreadsheet(buffer) {
   const wb    = XLSX.read(buffer, { type: 'buffer' });
@@ -331,15 +475,38 @@ app.post('/preview', previewUpload, (req, res) => {
 // ── Send ───────────────────────────────────────────────────────────────────
 app.post('/send', async (req, res) => {
   const { smtp_host, smtp_port, smtp_user, smtp_pass, from_name, emails } = req.body;
-  if (!smtp_host || !smtp_user || !smtp_pass)
-    return res.status(400).json({ error: 'SMTP host, username, and password are required' });
-  if (!emails?.length)
-    return res.status(400).json({ error: 'No emails to send' });
+  if (!smtp_user)      return res.status(400).json({ error: 'Email address is required' });
+  if (!emails?.length) return res.status(400).json({ error: 'No emails to send' });
 
-  // Construct From header: "Display Name" <email> or just email
   const fromAddr = from_name?.trim()
     ? `"${from_name.trim().replace(/"/g, "'")}" <${smtp_user}>`
     : smtp_user;
+
+  const sent = [], failed = [];
+
+  // ── Gmail API path (when user has authorized via Sign in with Google) ──────
+  if (req.session.gmailTokens) {
+    for (let i = 0; i < emails.length; i++) {
+      const item = emails[i];
+      try {
+        const token = await getGmailAccessToken(req.session);
+        await sendViaGmail(token, fromAddr, sanitizeMimeHeader(item.email), sanitizeMimeHeader(item.subject), item.body);
+        sent.push(item.email);
+      } catch (e) {
+        failed.push({ email: item.email, error: e.message });
+        if (isFatalGmailError(e.message)) {
+          for (let j = i + 1; j < emails.length; j++)
+            failed.push({ email: emails[j].email, error: 'Aborted — see previous error' });
+          return res.json({ sent, failed, aborted: true, abortReason: e.message });
+        }
+      }
+    }
+    return res.json({ sent, failed });
+  }
+
+  // ── SMTP path ─────────────────────────────────────────────────────────────
+  if (!smtp_host || !smtp_pass)
+    return res.status(400).json({ error: 'SMTP host and password are required' });
 
   const transport = nodemailer.createTransport({
     host:              smtp_host,
@@ -350,7 +517,6 @@ app.post('/send', async (req, res) => {
     greetingTimeout:   10_000, // abort if server doesn't send SMTP greeting within 10s
   });
 
-  const sent = [], failed = [];
   for (let i = 0; i < emails.length; i++) {
     const item = emails[i];
     try {
@@ -364,12 +530,9 @@ app.post('/send', async (req, res) => {
       sent.push(item.email);
     } catch (e) {
       failed.push({ email: item.email, error: e.message });
-      // Auth failures and quota errors won't resolve by retrying — abort the
-      // rest of the batch immediately rather than accumulating identical failures.
       if (isFatalSmtpError(e.message)) {
-        for (let j = i + 1; j < emails.length; j++) {
+        for (let j = i + 1; j < emails.length; j++)
           failed.push({ email: emails[j].email, error: 'Aborted — see previous error' });
-        }
         return res.json({ sent, failed, aborted: true, abortReason: e.message });
       }
     }

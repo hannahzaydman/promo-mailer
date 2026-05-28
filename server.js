@@ -2,9 +2,7 @@ const express = require('express');
 const multer  = require('multer');
 const XLSX    = require('xlsx');
 const path    = require('path');
-const fs      = require('fs');
 const crypto  = require('crypto');
-const nodemailer     = require('nodemailer');
 const session        = require('express-session');
 const FirestoreStore = require('./firestoreSessionStore')(session);
 
@@ -32,18 +30,22 @@ app.use((req, res, next) => {
   next();
 });
 
-const { escHtml, sanitizeMimeHeader, htmlToPlainText, applyTemplate, parseRecipientList, isFatalSmtpError, validateColumns, RateLimiter, validateInputLengths, redactCredentials } = require('./utils');
+const { escHtml, sanitizeMimeHeader, htmlToPlainText, applyTemplate, parseRecipientList, validateColumns, RateLimiter, validateInputLengths, redactCredentials } = require('./utils');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 // ── Config ─────────────────────────────────────────────────────────────────
 const PORT           = process.env.PORT           || 5001;
 const BASE_URL       = process.env.BASE_URL        || `http://localhost:${PORT}`;
-const ALLOWED_DOMAIN = process.env.ALLOWED_DOMAIN  || 'midnightecstasy.com';
+// Optional: set ALLOWED_DOMAIN=midnightecstasy.com to restrict sign-in to one domain.
+// Omit (or leave empty) to allow any Google account — required for multi-tenant use.
+const ALLOWED_DOMAIN = process.env.ALLOWED_DOMAIN  || '';
 const SESSION_SECRET = process.env.SESSION_SECRET  || 'local-dev-secret-change-in-prod';
 
-// Escape literal dots so the domain name doesn't act as a wildcard in the regex.
-const ALLOWED_DOMAIN_RE = new RegExp('@' + ALLOWED_DOMAIN.split('.').join('\\.') + '$', 'i');
+// Build domain-restriction regex only when a domain is configured.
+const ALLOWED_DOMAIN_RE = ALLOWED_DOMAIN
+  ? new RegExp('@' + ALLOWED_DOMAIN.split('.').join('\\.') + '$', 'i')
+  : null;
 if (BASE_URL.startsWith('https') && SESSION_SECRET === 'local-dev-secret-change-in-prod') {
   console.error('FATAL: SESSION_SECRET env var is not set. Refusing to start in production.');
   process.exit(1);
@@ -133,7 +135,7 @@ const LOGIN_PAGE = (msg = '') => `<!DOCTYPE html>
   <img src="https://f4.bcbits.com/img/0042095815_10.jpg" class="logo" alt="Midnight Ecstasy" />
   <h1>Promo Mailer</h1>
   <div class="sub">Upload · Compose · Send</div>
-  <p>Sign in with your ${ALLOWED_DOMAIN} account to continue.</p>
+  <p>${ALLOWED_DOMAIN ? `Sign in with your ${ALLOWED_DOMAIN} account to continue.` : 'Sign in with Google to continue. You\'ll also authorize sending email from your account.'}</p>
   <a href="/auth/login/google">Sign in with Google</a>
   ${msg ? `<p class="err">${escHtml(msg)}</p>` : ''}
 </div>
@@ -152,12 +154,16 @@ app.get('/auth/login/google', (req, res) => {
   const state = crypto.randomBytes(32).toString('hex');
   req.session.oauthState = state;
 
+  // Request gmail.send alongside identity scopes so users authorize sending
+  // in a single step rather than needing a second "Connect Gmail" flow.
+  // offline access_type + prompt:consent ensures we get a refresh token every time.
   const params = new URLSearchParams({
     client_id:     GOOGLE_CLIENT_ID,
     redirect_uri:  `${BASE_URL}/auth/login/callback`,
     response_type: 'code',
-    scope:         'openid email profile',
-    access_type:   'online',
+    scope:         'openid email profile https://www.googleapis.com/auth/gmail.send',
+    access_type:   'offline',
+    prompt:        'consent',
     state,
   });
   res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params}`);
@@ -194,11 +200,20 @@ app.get('/auth/login/callback', async (req, res) => {
     });
     const user = await userRes.json();
 
-    if (!user.email || !ALLOWED_DOMAIN_RE.test(user.email)) {
+    if (!user.email) {
+      return res.redirect('/auth/login?error=' + encodeURIComponent('Could not retrieve your email address from Google.'));
+    }
+    if (ALLOWED_DOMAIN_RE && !ALLOWED_DOMAIN_RE.test(user.email)) {
       return res.redirect(`/auth/login?error=${encodeURIComponent(`Access restricted to @${ALLOWED_DOMAIN} accounts.`)}`);
     }
 
+    // Store Gmail send tokens in session at login time — no separate auth step needed.
     req.session.user = { email: user.email, name: user.name };
+    req.session.gmailTokens = {
+      access_token:  tokens.access_token,
+      refresh_token: tokens.refresh_token,
+      expiry:        Date.now() + (tokens.expires_in || 3600) * 1000,
+    };
     res.redirect('/');
   } catch (e) {
     const msg = e.name === 'AbortError' ? 'Google sign-in timed out. Please try again.' : e.message;

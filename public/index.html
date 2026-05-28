@@ -115,6 +115,7 @@
       transition: color 0.15s;
       padding: 3px 6px;
       border: 1px solid transparent;
+      white-space: nowrap;
     }
     .header-social a:hover {
       color: var(--accent);
@@ -705,6 +706,34 @@
     #step1, #step2, #step3 { display: none; }
     #step1.active, #step2.active, #step3.active { display: block; }
 
+    /* ── Mobile ─────────────────────────────────────────────────────────────── */
+    @media (max-width: 560px) {
+      body { padding: 32px 14px 48px; }
+
+      /* Header: collapse grid to single centered column, aside drops below */
+      header { grid-template-columns: 1fr; }
+      header > div:first-child { display: none; }
+      .header-center { grid-column: 1; }
+      .header-aside  { grid-column: 1; text-align: center; margin-top: 10px; }
+      .header-social { justify-content: center; }
+      .header-byline { text-align: center; }
+      header h1      { font-size: 1.8rem; }
+      /* Let social links wrap and hide separators so they flow naturally */
+      .header-social { flex-wrap: wrap; gap: 6px 2px; }
+      .header-sep    { display: none; }
+
+      /* Steps: hide labels so numbers + connectors fit */
+      .step-label    { display: none; }
+      .step-connector { width: 28px; margin: 0 6px; }
+
+      /* Form grids: stack to single column */
+      .col-row           { grid-template-columns: 1fr; }
+      .manual-entry-row  { grid-template-columns: 1fr 1fr; }
+      .manual-entry-row button { grid-column: 1 / -1; }
+
+      /* Release card name row */
+      .release-header { flex-wrap: wrap; gap: 8px; }
+    }
   </style>
 </head>
 <body>

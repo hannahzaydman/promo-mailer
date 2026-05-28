@@ -646,7 +646,7 @@
 <div class="steps">
   <div class="step-item active" id="tab1">
     <div class="step-circle">1</div>
-    <span class="step-label">DJ List</span>
+    <span class="step-label">Recipients</span>
   </div>
   <div class="step-connector"></div>
   <div class="step-item" id="tab2">
@@ -663,16 +663,16 @@
 <!-- STEP 1 -->
 <div id="step1" class="active">
   <div class="card">
-    <h2>Upload DJ List</h2>
+    <h2>Upload Recipient List</h2>
     <div id="step1-error" class="error-banner"></div>
 
     <div class="field">
-      <label>DJ List (.xlsx or .csv)</label>
+      <label>Recipient List (.xlsx or .csv)</label>
       <div class="file-upload">
-        <input type="file" id="dj-file" accept=".xlsx,.csv" />
+        <input type="file" id="recipient-file" accept=".xlsx,.csv" />
         <div class="file-upload-label">
           <span>&#8593; Choose file</span>
-          <span class="filename" id="dj-filename">No file chosen</span>
+          <span class="filename" id="recipient-filename">No file chosen</span>
         </div>
       </div>
     </div>
@@ -815,17 +815,17 @@
   let allEmailsToSend = [];
 
   // ── Step 1 ────────────────────────────────────────────────────────────────
-  document.getElementById('dj-file').addEventListener('change', async (e) => {
+  document.getElementById('recipient-file').addEventListener('change', async (e) => {
     djFile = e.target.files[0];
-    document.getElementById('dj-filename').textContent = djFile ? djFile.name : 'No file chosen';
+    document.getElementById('recipient-filename').textContent = djFile ? djFile.name : 'No file chosen';
     if (!djFile) return;
     const fd = new FormData();
-    fd.append('dj_file', djFile);
+    fd.append('recipient_file', djFile);
     try {
       const res = await fetch('/get-columns', { method: 'POST', body: fd });
       const data = await res.json();
       if (data.error) { showError('step1-error', data.error); return; }
-      populateSelect('name-col', data.columns, autoGuess(data.columns, ['name','artist','dj','first']));
+      populateSelect('name-col', data.columns, autoGuess(data.columns, ['name','artist','dj','recipient','first']));
       populateSelect('email-col', data.columns, autoGuess(data.columns, ['email','e-mail','mail']));
       document.getElementById('col-selectors').classList.remove('hidden');
       document.getElementById('step1-next').disabled = false;
@@ -1094,7 +1094,7 @@
     releases.find(r => r.id === id).file = file;
     document.getElementById(`codes-filename-${id}`).textContent = file.name;
     const fd = new FormData();
-    fd.append('dj_file', file);
+    fd.append('recipient_file', file);
     try {
       const res = await fetch('/get-columns', { method: 'POST', body: fd });
       const data = await res.json();
@@ -1140,7 +1140,7 @@
     }
 
     const fd = new FormData();
-    fd.append('dj_file', djFile);
+    fd.append('recipient_file', djFile);
     fd.append('name_col', document.getElementById('name-col').value);
     fd.append('email_col', document.getElementById('email-col').value);
     fd.append('release_count', releases.length);

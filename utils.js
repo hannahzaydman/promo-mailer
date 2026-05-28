@@ -75,11 +75,11 @@ function applyTemplate(template, name, code) {
  * contain '@' (catches Excel number/date-formatted cells misconstrued as emails).
  *
  * @param {object[]} rows     - Parsed spreadsheet rows (from XLSX.utils.sheet_to_json)
- * @param {string}   nameCol  - Column name to use as the DJ's display name
- * @param {string}   emailCol - Column name to use as the DJ's email address
+ * @param {string}   nameCol  - Column name to use as the recipient's display name
+ * @param {string}   emailCol - Column name to use as the recipient's email address
  * @returns {{ name: string, email: string }[]}
  */
-function parseDjList(rows, nameCol, emailCol) {
+function parseRecipientList(rows, nameCol, emailCol) {
   return rows
     .map(r => ({
       name:  String(r[nameCol]  ?? '').trim(),
@@ -88,4 +88,4 @@ function parseDjList(rows, nameCol, emailCol) {
     .filter(r => r.name && r.email && r.email.includes('@'));
 }
 
-module.exports = { escHtml, sanitizeMimeHeader, htmlToPlainText, applyTemplate, parseDjList };
+module.exports = { escHtml, sanitizeMimeHeader, htmlToPlainText, applyTemplate, parseRecipientList };

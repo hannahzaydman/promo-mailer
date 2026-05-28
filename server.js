@@ -30,7 +30,7 @@ app.use((req, res, next) => {
   next();
 });
 
-const { escHtml, sanitizeMimeHeader, htmlToPlainText, applyTemplate, parseDjList } = require('./utils');
+const { escHtml, sanitizeMimeHeader, htmlToPlainText, applyTemplate, parseRecipientList } = require('./utils');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
@@ -394,7 +394,7 @@ function readSpreadsheet(buffer) {
 
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
-app.post('/get-columns', upload.single('dj_file'), (req, res) => {
+app.post('/get-columns', upload.single('recipient_file'), (req, res) => {
   try {
     const rows = readSpreadsheet(req.file.buffer);
     if (!rows.length) return res.json({ error: 'File appears to be empty' });
@@ -405,7 +405,7 @@ app.post('/get-columns', upload.single('dj_file'), (req, res) => {
 });
 
 const previewUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } }).fields([
-  { name: 'dj_file', maxCount: 1 },
+  { name: 'recipient_file', maxCount: 1 },
   ...Array.from({ length: 10 }, (_, i) => ({ name: `codes_file_${i}`, maxCount: 1 })),
 ]);
 
@@ -416,29 +416,29 @@ app.post('/preview', previewUpload, (req, res) => {
     const count = Math.min(parseInt(release_count) || 0, 10);
     if (count === 0) return res.status(400).json({ error: 'No releases provided' });
 
-    const djFileInfo = req.files['dj_file']?.[0];
-    if (!djFileInfo) return res.status(400).json({ error: 'DJ file missing' });
+    const recipientFileInfo = req.files['recipient_file']?.[0];
+    if (!recipientFileInfo) return res.status(400).json({ error: 'Recipient file missing' });
 
     const warnings = [];
 
-    // Parse DJ list and warn if rows were silently dropped
-    const rawDjRows = readSpreadsheet(djFileInfo.buffer);
-    const djList    = parseDjList(rawDjRows, name_col, email_col);
+    // Parse recipient list and warn if rows were silently dropped
+    const rawRecipientRows = readSpreadsheet(recipientFileInfo.buffer);
+    const recipientList    = parseRecipientList(rawRecipientRows, name_col, email_col);
 
-    if (!djList.length) return res.status(400).json({ error: 'No valid DJ rows found. Check that the correct name and email columns are selected, and that email addresses contain @.' });
+    if (!recipientList.length) return res.status(400).json({ error: 'No valid recipients found. Check that the correct name and email columns are selected, and that email addresses contain @.' });
 
-    const dropped = rawDjRows.length - djList.length;
+    const dropped = rawRecipientRows.length - recipientList.length;
     if (dropped > 0) {
-      warnings.push(`${dropped} DJ row${dropped !== 1 ? 's' : ''} were skipped (blank, missing name/email, or invalid email format). If you prepared your codes file to align row-for-row, the assignment order may be off.`);
+      warnings.push(`${dropped} recipient row${dropped !== 1 ? 's' : ''} were skipped (blank, missing name/email, or invalid email format). If you prepared your codes file to align row-for-row, the assignment order may be off.`);
     }
 
-    // Warn about duplicate email addresses in the DJ list
+    // Warn about duplicate email addresses in the recipient list
     const emailCount = {};
-    djList.forEach(dj => { emailCount[dj.email] = (emailCount[dj.email] || 0) + 1; });
+    recipientList.forEach(recipient => { emailCount[recipient.email] = (emailCount[recipient.email] || 0) + 1; });
     const dupes = Object.keys(emailCount).filter(e => emailCount[e] > 1);
     if (dupes.length > 0) {
       const preview = dupes.slice(0, 3).join(', ') + (dupes.length > 3 ? '…' : '');
-      warnings.push(`${dupes.length} duplicate email address${dupes.length !== 1 ? 'es' : ''} found — those DJs will receive multiple emails: ${preview}`);
+      warnings.push(`${dupes.length} duplicate email address${dupes.length !== 1 ? 'es' : ''} found — those recipients will receive multiple emails: ${preview}`);
     }
 
     const releases = [];
@@ -457,26 +457,26 @@ app.post('/preview', previewUpload, (req, res) => {
       // Warn if blank rows were dropped from the codes file (row-alignment risk)
       const codesDropped = rawCodeRows.length - codes.length;
       if (codesDropped > 0) {
-        warnings.push(`"${name}": ${codesDropped} empty row${codesDropped !== 1 ? 's' : ''} skipped in codes file — row order may not match your DJ list.`);
+        warnings.push(`"${name}": ${codesDropped} empty row${codesDropped !== 1 ? 's' : ''} skipped in codes file — row order may not match your recipient list.`);
       }
 
-      if (codes.length < djList.length) {
+      if (codes.length < recipientList.length) {
         return res.status(400).json({
-          error: `"${name}": not enough codes (${codes.length}) for all DJs (${djList.length}).`
+          error: `"${name}": not enough codes (${codes.length}) for all recipients (${recipientList.length}).`
         });
       }
 
       releases.push({
         name,
-        count: djList.length,
-        emails: djList.map((dj, j) => {
+        count: recipientList.length,
+        emails: recipientList.map((recipient, j) => {
           const code = codes[j];
           return {
-            name:    dj.name,
-            email:   dj.email,
+            name:    recipient.name,
+            email:   recipient.email,
             code,
-            subject: applyTemplate(subject, dj.name, code),
-            body:    applyTemplate(body,    dj.name, code),
+            subject: applyTemplate(subject, recipient.name, code),
+            body:    applyTemplate(body,    recipient.name, code),
             release: name,
           };
         }),

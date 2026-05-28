@@ -21,7 +21,7 @@ app.use((req, res, next) => {
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "font-src https://fonts.gstatic.com",
     "connect-src 'self' https://accounts.google.com",
-    "img-src 'self' data:",
+    "img-src 'self' data: https://f4.bcbits.com",
     "frame-ancestors 'none'",
     "object-src 'none'",
     "base-uri 'self'",

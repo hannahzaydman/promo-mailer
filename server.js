@@ -3,6 +3,7 @@ const multer  = require('multer');
 const XLSX    = require('xlsx');
 const path    = require('path');
 const fs      = require('fs');
+const nodemailer     = require('nodemailer');
 const session        = require('express-session');
 const FirestoreStore = require('./firestoreSessionStore')(session);
 
@@ -21,7 +22,7 @@ app.use((req, res, next) => {
     "script-src 'self' 'unsafe-inline'",
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "font-src https://fonts.gstatic.com",
-    "connect-src 'self' https://accounts.google.com",
+    "connect-src 'self'",
     "img-src 'self' data: https://f4.bcbits.com",
     "frame-ancestors 'none'",
     "object-src 'none'",
@@ -37,7 +38,6 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // ── Config ─────────────────────────────────────────────────────────────────
 const PORT           = process.env.PORT           || 5001;
 const BASE_URL       = process.env.BASE_URL        || `http://localhost:${PORT}`;
-const BUCKET_NAME    = process.env.BUCKET_NAME;
 const ALLOWED_DOMAIN = process.env.ALLOWED_DOMAIN  || 'midnightecstasy.com';
 const SESSION_SECRET = process.env.SESSION_SECRET  || 'local-dev-secret-change-in-prod';
 
@@ -72,62 +72,11 @@ function requireAuth(req, res, next) {
   if (req.path.startsWith('/auth/login')) return next();
   if (req.session?.user) return next();
 
-  // No Google credentials configured yet — let through so user can set up
-  if (!GOOGLE_CLIENT_ID && !oauthConfig.clientId) return next();
+  // No Google credentials configured — let through so app is accessible
+  if (!GOOGLE_CLIENT_ID) return next();
 
   res.redirect('/auth/login');
 }
-
-// ── GCS or local config persistence (tokens only) ─────────────────────────
-let gcsStorage, gcsBucket;
-if (BUCKET_NAME) {
-  const { Storage } = require('@google-cloud/storage');
-  gcsStorage = new Storage();
-  gcsBucket  = gcsStorage.bucket(BUCKET_NAME);
-}
-
-const CONFIG_PATH = path.join(__dirname, 'config.json');
-
-// oauthConfig holds Gmail tokens (and credentials as fallback for local dev)
-let oauthConfig = { clientId: null, clientSecret: null, tokens: null };
-
-async function loadConfig() {
-  try {
-    let raw;
-    if (gcsBucket) {
-      const [contents] = await gcsBucket.file('config.json').download();
-      raw = contents.toString();
-    } else {
-      raw = fs.readFileSync(CONFIG_PATH, 'utf8');
-    }
-    const saved = JSON.parse(raw);
-    oauthConfig.clientId     = saved.clientId     || null;
-    oauthConfig.clientSecret = saved.clientSecret || null;
-    oauthConfig.tokens       = saved.tokens       || null;
-    if (oauthConfig.tokens) console.log('Loaded saved Gmail authorization.');
-  } catch (e) {
-    if (e.code !== 404 && e.code !== 'ENOENT') console.error('Config load error:', e.message);
-  }
-}
-
-async function saveConfig() {
-  const data = JSON.stringify({
-    clientId:     oauthConfig.clientId,
-    clientSecret: oauthConfig.clientSecret,
-    tokens:       oauthConfig.tokens,
-  }, null, 2);
-  if (gcsBucket) {
-    await gcsBucket.file('config.json').save(data);
-  } else {
-    fs.writeFileSync(CONFIG_PATH, data);
-  }
-}
-
-// Use Secret Manager env vars in prod, fall back to config file for local dev
-function getClientId()     { return GOOGLE_CLIENT_ID     || oauthConfig.clientId; }
-function getClientSecret() { return GOOGLE_CLIENT_SECRET || oauthConfig.clientSecret; }
-
-loadConfig();
 
 // ── Google login routes ────────────────────────────────────────────────────
 const LOGIN_PAGE = (msg = '') => `<!DOCTYPE html>
@@ -169,11 +118,10 @@ app.get('/auth/login', (req, res) => {
 });
 
 app.get('/auth/login/google', (req, res) => {
-  const clientId = getClientId();
-  if (!clientId) return res.send(LOGIN_PAGE('OAuth not configured. Set GOOGLE_CLIENT_ID env var.'));
+  if (!GOOGLE_CLIENT_ID) return res.send(LOGIN_PAGE('OAuth not configured. Set GOOGLE_CLIENT_ID env var.'));
 
   const params = new URLSearchParams({
-    client_id:     clientId,
+    client_id:     GOOGLE_CLIENT_ID,
     redirect_uri:  `${BASE_URL}/auth/login/callback`,
     response_type: 'code',
     scope:         'openid email profile',
@@ -191,8 +139,8 @@ app.get('/auth/login/callback', async (req, res) => {
       method:  'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
-        client_id:     getClientId(),
-        client_secret: getClientSecret(),
+        client_id:     GOOGLE_CLIENT_ID,
+        client_secret: GOOGLE_CLIENT_SECRET,
         code,
         grant_type:    'authorization_code',
         redirect_uri:  `${BASE_URL}/auth/login/callback`,
@@ -224,153 +172,6 @@ app.get('/auth/logout', (req, res) => {
 // Apply auth middleware to all subsequent routes
 app.use(requireAuth);
 app.use(express.static(path.join(__dirname, 'public')));
-
-// ── Gmail OAuth endpoints ──────────────────────────────────────────────────
-app.post('/auth/setup', async (req, res) => {
-  const client_id     = getClientId()     || req.body.client_id?.trim();
-  const client_secret = getClientSecret() || req.body.client_secret?.trim();
-  if (!client_id || !client_secret)
-    return res.status(400).json({ error: 'client_id and client_secret are required' });
-
-  // Only persist to config if not coming from Secret Manager
-  if (!GOOGLE_CLIENT_ID) {
-    oauthConfig.clientId     = client_id;
-    oauthConfig.clientSecret = client_secret;
-    oauthConfig.tokens       = null;
-    await saveConfig();
-  }
-
-  const params = new URLSearchParams({
-    client_id,
-    redirect_uri:  `${BASE_URL}/auth/callback`,
-    response_type: 'code',
-    scope:         'https://www.googleapis.com/auth/gmail.send',
-    access_type:   'offline',
-    prompt:        'consent',
-  });
-  res.json({ authUrl: `https://accounts.google.com/o/oauth2/v2/auth?${params}` });
-});
-
-app.get('/auth/callback', async (req, res) => {
-  const { code, error } = req.query;
-  const style = 'font-family:sans-serif;padding:32px;background:#0e0e0e;color:';
-
-  if (error) {
-    return res.send(`<html><body style="${style}#ff5c5c">
-      <p>Authorization failed: ${escHtml(error)}</p><p>Close this tab and try again.</p>
-    </body></html>`);
-  }
-
-  try {
-    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_id:     getClientId(),
-        client_secret: getClientSecret(),
-        code,
-        grant_type:    'authorization_code',
-        redirect_uri:  `${BASE_URL}/auth/callback`,
-      }),
-    });
-    const tokens = await tokenRes.json();
-    if (tokens.error) throw new Error(tokens.error_description || tokens.error);
-
-    oauthConfig.tokens = {
-      access_token:  tokens.access_token,
-      refresh_token: tokens.refresh_token,
-      expiry:        Date.now() + (tokens.expires_in - 60) * 1000,
-    };
-    await saveConfig();
-
-    res.send(`<html><body style="${style}#c8f135">
-      <p>&#10003; Authorized! You can close this tab.</p>
-      <script>window.opener?.postMessage('gmail-authorized', window.location.origin);window.close();</script>
-    </body></html>`);
-  } catch (e) {
-    res.send(`<html><body style="${style}#ff5c5c">
-      <p>Token exchange failed: ${e.message}</p><p>Close this tab and try again.</p>
-    </body></html>`);
-  }
-});
-
-app.get('/auth/status', (_req, res) => res.json({ authorized: !!oauthConfig.tokens }));
-
-app.get('/auth/config', (_req, res) => res.json({
-  clientId:          getClientId()     || '',
-  // Never expose the client secret to the browser — return only whether it's set
-  hasClientSecret:   !!(getClientSecret()),
-  credentialsLocked: !!(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET),
-  authorized:        !!oauthConfig.tokens,
-}));
-
-// ── Gmail API helpers ──────────────────────────────────────────────────────
-async function getAccessToken() {
-  if (!oauthConfig.tokens) throw new Error('Not authorized with Gmail');
-  if (Date.now() < oauthConfig.tokens.expiry) return oauthConfig.tokens.access_token;
-
-  const res = await fetch('https://oauth2.googleapis.com/token', {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      client_id:     getClientId(),
-      client_secret: getClientSecret(),
-      refresh_token: oauthConfig.tokens.refresh_token,
-      grant_type:    'refresh_token',
-    }),
-  });
-  const data = await res.json();
-  if (data.error) throw new Error(`Token refresh failed: ${data.error_description || data.error}`);
-
-  oauthConfig.tokens.access_token = data.access_token;
-  oauthConfig.tokens.expiry       = Date.now() + (data.expires_in - 60) * 1000;
-  await saveConfig();
-  return oauthConfig.tokens.access_token;
-}
-
-async function sendGmail(accessToken, from, to, subject, htmlBody) {
-  // Strip newlines from header values to prevent MIME header injection
-  from    = sanitizeMimeHeader(from);
-  to      = sanitizeMimeHeader(to);
-  subject = sanitizeMimeHeader(subject);
-
-  const boundary = 'mp_' + Date.now().toString(36);
-
-  const textBody = htmlToPlainText(htmlBody);
-
-  const mime = [
-    `From: ${from}`,
-    `To: ${to}`,
-    `Subject: ${subject}`,
-    'MIME-Version: 1.0',
-    `Content-Type: multipart/alternative; boundary="${boundary}"`,
-    '',
-    `--${boundary}`,
-    'Content-Type: text/plain; charset=UTF-8',
-    '',
-    textBody,
-    '',
-    `--${boundary}`,
-    'Content-Type: text/html; charset=UTF-8',
-    '',
-    `<!DOCTYPE html><html><body style="font-family:sans-serif;font-size:14px;line-height:1.6;color:#333;max-width:600px">${htmlBody}</body></html>`,
-    '',
-    `--${boundary}--`,
-  ].join('\r\n');
-
-  const raw = Buffer.from(mime).toString('base64url');
-
-  const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
-    method:  'POST',
-    headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ raw }),
-  });
-
-  if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.error?.message || `HTTP ${res.status}`);
-  }
-}
 
 // ── Spreadsheet endpoints ──────────────────────────────────────────────────
 function readSpreadsheet(buffer) {
@@ -491,45 +292,58 @@ app.post('/preview', previewUpload, (req, res) => {
 });
 
 // Errors that mean retrying further emails won't help — abort the batch.
-const FATAL_SEND_ERRORS = [
-  'token refresh failed',
-  'not authorized with gmail',
-  'invalid_grant',
+const FATAL_SMTP_ERRORS = [
+  'invalid login',
+  'authentication failed',
+  'authentication unsuccessful',
+  'too many login attempts',
+  'daily sending limit exceeded',
   'daily limit exceeded',
   'user rate limit exceeded',
-  'insufficient authentication scopes',
-  'request had invalid authentication credentials',
 ];
 
-function isFatalSendError(message) {
+function isFatalSmtpError(message) {
   const lower = message.toLowerCase();
-  return FATAL_SEND_ERRORS.some(pat => lower.includes(pat));
+  return FATAL_SMTP_ERRORS.some(pat => lower.includes(pat));
 }
 
 // ── Send ───────────────────────────────────────────────────────────────────
 app.post('/send', async (req, res) => {
-  const { gmail_user, from_name, emails } = req.body;
-  if (!gmail_user)     return res.status(400).json({ error: 'Gmail address is required' });
-  if (!oauthConfig.tokens) return res.status(401).json({ error: 'Not authorized with Gmail. Complete the OAuth setup first.' });
-  if (!emails?.length) return res.status(400).json({ error: 'No emails to send' });
+  const { smtp_host, smtp_port, smtp_user, smtp_pass, from_name, emails } = req.body;
+  if (!smtp_host || !smtp_user || !smtp_pass)
+    return res.status(400).json({ error: 'SMTP host, username, and password are required' });
+  if (!emails?.length)
+    return res.status(400).json({ error: 'No emails to send' });
 
   // Construct From header: "Display Name" <email> or just email
   const fromAddr = from_name?.trim()
-    ? `"${from_name.trim().replace(/"/g, "'")}" <${gmail_user}>`
-    : gmail_user;
+    ? `"${from_name.trim().replace(/"/g, "'")}" <${smtp_user}>`
+    : smtp_user;
+
+  const transport = nodemailer.createTransport({
+    host:   smtp_host,
+    port:   parseInt(smtp_port) || 587,
+    secure: false,
+    auth:   { user: smtp_user, pass: smtp_pass },
+  });
 
   const sent = [], failed = [];
   for (let i = 0; i < emails.length; i++) {
     const item = emails[i];
     try {
-      const token = await getAccessToken();
-      await sendGmail(token, fromAddr, item.email, item.subject, item.body);
+      await transport.sendMail({
+        from:    fromAddr,
+        to:      sanitizeMimeHeader(item.email),
+        subject: sanitizeMimeHeader(item.subject),
+        text:    htmlToPlainText(item.body),
+        html:    `<!DOCTYPE html><html><body style="font-family:sans-serif;font-size:14px;line-height:1.6;color:#333;max-width:600px">${item.body}</body></html>`,
+      });
       sent.push(item.email);
     } catch (e) {
       failed.push({ email: item.email, error: e.message });
       // Auth failures and quota errors won't resolve by retrying — abort the
       // rest of the batch immediately rather than accumulating identical failures.
-      if (isFatalSendError(e.message)) {
+      if (isFatalSmtpError(e.message)) {
         for (let j = i + 1; j < emails.length; j++) {
           failed.push({ email: emails[j].email, error: 'Aborted — see previous error' });
         }

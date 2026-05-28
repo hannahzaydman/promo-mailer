@@ -2,9 +2,7 @@ const express = require('express');
 const multer  = require('multer');
 const XLSX    = require('xlsx');
 const path    = require('path');
-const fs      = require('fs');
 const crypto  = require('crypto');
-const nodemailer     = require('nodemailer');
 const session        = require('express-session');
 const FirestoreStore = require('./firestoreSessionStore')(session);
 
@@ -39,11 +37,15 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 // ── Config ─────────────────────────────────────────────────────────────────
 const PORT           = process.env.PORT           || 5001;
 const BASE_URL       = process.env.BASE_URL        || `http://localhost:${PORT}`;
-const ALLOWED_DOMAIN = process.env.ALLOWED_DOMAIN  || 'midnightecstasy.com';
+// Optional: set ALLOWED_DOMAIN=midnightecstasy.com to restrict sign-in to one domain.
+// Omit (or leave empty) to allow any Google account — required for multi-tenant use.
+const ALLOWED_DOMAIN = process.env.ALLOWED_DOMAIN  || '';
 const SESSION_SECRET = process.env.SESSION_SECRET  || 'local-dev-secret-change-in-prod';
 
-// Escape literal dots so the domain name doesn't act as a wildcard in the regex.
-const ALLOWED_DOMAIN_RE = new RegExp('@' + ALLOWED_DOMAIN.split('.').join('\\.') + '$', 'i');
+// Build domain-restriction regex only when a domain is configured.
+const ALLOWED_DOMAIN_RE = ALLOWED_DOMAIN
+  ? new RegExp('@' + ALLOWED_DOMAIN.split('.').join('\\.') + '$', 'i')
+  : null;
 if (BASE_URL.startsWith('https') && SESSION_SECRET === 'local-dev-secret-change-in-prod') {
   console.error('FATAL: SESSION_SECRET env var is not set. Refusing to start in production.');
   process.exit(1);
@@ -133,7 +135,7 @@ const LOGIN_PAGE = (msg = '') => `<!DOCTYPE html>
   <img src="https://f4.bcbits.com/img/0042095815_10.jpg" class="logo" alt="Midnight Ecstasy" />
   <h1>Promo Mailer</h1>
   <div class="sub">Upload · Compose · Send</div>
-  <p>Sign in with your ${ALLOWED_DOMAIN} account to continue.</p>
+  <p>${ALLOWED_DOMAIN ? `Sign in with your ${ALLOWED_DOMAIN} account to continue.` : 'Sign in with Google to continue. You\'ll also authorize sending email from your account.'}</p>
   <a href="/auth/login/google">Sign in with Google</a>
   ${msg ? `<p class="err">${escHtml(msg)}</p>` : ''}
 </div>
@@ -152,12 +154,16 @@ app.get('/auth/login/google', (req, res) => {
   const state = crypto.randomBytes(32).toString('hex');
   req.session.oauthState = state;
 
+  // Request gmail.send alongside identity scopes so users authorize sending
+  // in a single step rather than needing a second "Connect Gmail" flow.
+  // offline access_type + prompt:consent ensures we get a refresh token every time.
   const params = new URLSearchParams({
     client_id:     GOOGLE_CLIENT_ID,
     redirect_uri:  `${BASE_URL}/auth/login/callback`,
     response_type: 'code',
-    scope:         'openid email profile',
-    access_type:   'online',
+    scope:         'openid email profile https://www.googleapis.com/auth/gmail.send',
+    access_type:   'offline',
+    prompt:        'consent',
     state,
   });
   res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params}`);
@@ -194,11 +200,20 @@ app.get('/auth/login/callback', async (req, res) => {
     });
     const user = await userRes.json();
 
-    if (!user.email || !ALLOWED_DOMAIN_RE.test(user.email)) {
+    if (!user.email) {
+      return res.redirect('/auth/login?error=' + encodeURIComponent('Could not retrieve your email address from Google.'));
+    }
+    if (ALLOWED_DOMAIN_RE && !ALLOWED_DOMAIN_RE.test(user.email)) {
       return res.redirect(`/auth/login?error=${encodeURIComponent(`Access restricted to @${ALLOWED_DOMAIN} accounts.`)}`);
     }
 
+    // Store Gmail send tokens in session at login time — no separate auth step needed.
     req.session.user = { email: user.email, name: user.name };
+    req.session.gmailTokens = {
+      access_token:  tokens.access_token,
+      refresh_token: tokens.refresh_token,
+      expiry:        Date.now() + (tokens.expires_in || 3600) * 1000,
+    };
     res.redirect('/');
   } catch (e) {
     const msg = e.name === 'AbortError' ? 'Google sign-in timed out. Please try again.' : e.message;
@@ -214,72 +229,10 @@ app.get('/auth/logout', (req, res) => {
 app.use(requireAuth);
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ── Gmail send OAuth ───────────────────────────────────────────────────────
-// Separate OAuth flow for gmail.send scope — tokens live in the session only.
-// The same Google Cloud OAuth client is reused; add /auth/gmail/callback to
-// the "Authorized redirect URIs" in Google Cloud Console.
-
-app.post('/auth/gmail/setup', (req, res) => {
-  if (!GOOGLE_CLIENT_ID)
-    return res.status(501).json({ error: 'Google OAuth not configured.' });
-  const state = crypto.randomBytes(32).toString('hex');
-  req.session.gmailOAuthState = state;
-  const params = new URLSearchParams({
-    client_id:     GOOGLE_CLIENT_ID,
-    redirect_uri:  `${BASE_URL}/auth/gmail/callback`,
-    response_type: 'code',
-    scope:         'https://www.googleapis.com/auth/gmail.send',
-    access_type:   'offline',
-    prompt:        'consent',
-    state,
-  });
-  res.json({ authUrl: `https://accounts.google.com/o/oauth2/v2/auth?${params}` });
-});
-
-app.get('/auth/gmail/callback', async (req, res) => {
-  const { code, error, state } = req.query;
-  if (error) return res.send(`<script>window.opener?.postMessage('gmail-error','*');window.close();</script>`);
-
-  const expectedState = req.session.gmailOAuthState;
-  delete req.session.gmailOAuthState;
-  if (!state || !expectedState || state !== expectedState)
-    return res.send(`<script>window.opener?.postMessage('gmail-error','*');window.close();</script>`);
-
-  try {
-    const tokenRes = await fetchWithTimeout('https://oauth2.googleapis.com/token', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_id:     GOOGLE_CLIENT_ID,
-        client_secret: GOOGLE_CLIENT_SECRET,
-        code,
-        grant_type:    'authorization_code',
-        redirect_uri:  `${BASE_URL}/auth/gmail/callback`,
-      }),
-    });
-    const tokens = await tokenRes.json();
-    if (tokens.error) throw new Error(tokens.error_description || tokens.error);
-    req.session.gmailTokens = {
-      access_token:  tokens.access_token,
-      refresh_token: tokens.refresh_token,
-      expiry:        Date.now() + (tokens.expires_in || 3600) * 1000,
-    };
-    res.send(`<script>window.opener?.postMessage('gmail-authorized','*');window.close();</script>`);
-  } catch (e) {
-    res.send(`<script>window.opener?.postMessage('gmail-error','*');window.close();</script>`);
-  }
-});
-
-app.get('/auth/gmail/status', (req, res) => {
-  res.json({
-    authorized: !!(req.session.gmailTokens?.access_token),
-    hasOAuth:   !!GOOGLE_CLIENT_ID,
-  });
-});
-
-app.post('/auth/gmail/revoke', (req, res) => {
-  delete req.session.gmailTokens;
-  res.json({ ok: true });
+// ── Auth info ──────────────────────────────────────────────────────────────
+app.get('/auth/me', (req, res) => {
+  if (!req.session?.user) return res.status(401).json({ error: 'Not authenticated' });
+  res.json({ email: req.session.user.email, name: req.session.user.name });
 });
 
 async function getGmailAccessToken(session) {
@@ -455,7 +408,6 @@ app.post('/preview', previewUpload, (req, res) => {
     recipientList = recipientList.concat(extraRecipients);
 
     if (!recipientList.length) return res.status(400).json({ error: 'No valid recipients found. Check that the correct email column is selected and that email addresses contain @.' });
-
     // Warn about duplicate email addresses in the recipient list
     const emailCount = {};
     recipientList.forEach(recipient => { emailCount[recipient.email] = (emailCount[recipient.email] || 0) + 1; });
@@ -538,76 +490,34 @@ app.post('/send', async (req, res) => {
     return res.status(429).json({ error: 'Too many requests. Please wait a moment before sending again.' });
   }
 
-  const { smtp_host, smtp_port, smtp_user, smtp_pass, from_name, emails } = req.body;
-  if (!smtp_user)      return res.status(400).json({ error: 'Email address is required' });
+  if (!req.session.gmailTokens)
+    return res.status(401).json({ error: 'Gmail not authorized. Please sign out and sign in again.' });
+
+  const { from_name, emails } = req.body;
   if (!emails?.length) return res.status(400).json({ error: 'No emails to send' });
 
-  // Input length validation — prevents oversized strings from reaching the
-  // SMTP transport or appearing in logs.
-  const lenErr = validateInputLengths({
-    'from_name': { value: from_name, max: 200 },
-    'smtp_host': { value: smtp_host, max: 253 },
-    'smtp_user': { value: smtp_user, max: 254 },
-    'smtp_pass': { value: smtp_pass, max: 256 },
-  });
+  const lenErr = validateInputLengths({ 'from_name': { value: from_name, max: 200 } });
   if (lenErr) return res.status(400).json({ error: lenErr });
 
-  const fromAddr = from_name?.trim()
-    ? `"${from_name.trim().replace(/"/g, "'")}" <${smtp_user}>`
-    : smtp_user;
+  const fromEmail = req.session.user.email;
+  const fromAddr  = from_name?.trim()
+    ? `"${from_name.trim().replace(/"/g, "'")}" <${fromEmail}>`
+    : fromEmail;
 
   const sent = [], failed = [];
-
-  // ── Gmail API path (when user has authorized via Sign in with Google) ──────
-  if (req.session.gmailTokens) {
-    for (let i = 0; i < emails.length; i++) {
-      const item = emails[i];
-      try {
-        const token = await getGmailAccessToken(req.session);
-        await sendViaGmail(token, fromAddr, sanitizeMimeHeader(item.email), sanitizeMimeHeader(item.subject), item.body);
-        sent.push(item.email);
-      } catch (e) {
-        failed.push({ email: item.email, error: redactCredentials(e.message, GOOGLE_CLIENT_SECRET) });
-        if (isFatalGmailError(e.message)) {
-          for (let j = i + 1; j < emails.length; j++)
-            failed.push({ email: emails[j].email, error: 'Aborted — see previous error' });
-          return res.json({ sent, failed, aborted: true, abortReason: redactCredentials(e.message, GOOGLE_CLIENT_SECRET) });
-        }
-      }
-    }
-    return res.json({ sent, failed });
-  }
-
-  // ── SMTP path ─────────────────────────────────────────────────────────────
-  if (!smtp_host || !smtp_pass)
-    return res.status(400).json({ error: 'SMTP host and password are required' });
-
-  const transport = nodemailer.createTransport({
-    host:              smtp_host,
-    port:              parseInt(smtp_port) || 587,
-    secure:            false,
-    auth:              { user: smtp_user, pass: smtp_pass },
-    connectionTimeout: 10_000, // abort if TCP connect takes > 10s (e.g. unrouteable IP)
-    greetingTimeout:   10_000, // abort if server doesn't send SMTP greeting within 10s
-  });
 
   for (let i = 0; i < emails.length; i++) {
     const item = emails[i];
     try {
-      await transport.sendMail({
-        from:    fromAddr,
-        to:      sanitizeMimeHeader(item.email),
-        subject: sanitizeMimeHeader(item.subject),
-        text:    htmlToPlainText(item.body),
-        html:    `<!DOCTYPE html><html><body style="font-family:sans-serif;font-size:14px;line-height:1.6;color:#333;max-width:600px">${item.body}</body></html>`,
-      });
+      const token = await getGmailAccessToken(req.session);
+      await sendViaGmail(token, fromAddr, sanitizeMimeHeader(item.email), sanitizeMimeHeader(item.subject), item.body);
       sent.push(item.email);
     } catch (e) {
-      failed.push({ email: item.email, error: redactCredentials(e.message, smtp_pass) });
-      if (isFatalSmtpError(e.message)) {
+      failed.push({ email: item.email, error: redactCredentials(e.message, GOOGLE_CLIENT_SECRET) });
+      if (isFatalGmailError(e.message)) {
         for (let j = i + 1; j < emails.length; j++)
           failed.push({ email: emails[j].email, error: 'Aborted — see previous error' });
-        return res.json({ sent, failed, aborted: true, abortReason: redactCredentials(e.message, smtp_pass) });
+        return res.json({ sent, failed, aborted: true, abortReason: redactCredentials(e.message, GOOGLE_CLIENT_SECRET) });
       }
     }
   }

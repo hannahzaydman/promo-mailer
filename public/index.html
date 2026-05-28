@@ -1050,6 +1050,7 @@
     const popup = window.open(data.authUrl, 'gmail-auth', 'width=500,height=640');
 
     window.addEventListener('message', async (e) => {
+      if (e.origin !== window.location.origin) return;
       if (e.data === 'gmail-authorized') {
         popup?.close();
         await checkAuthStatus();
@@ -1068,8 +1069,16 @@
     try {
       const res  = await fetch('/auth/config');
       const data = await res.json();
-      if (data.clientId)     document.getElementById('client-id').value     = data.clientId;
-      if (data.clientSecret) document.getElementById('client-secret').value = data.clientSecret;
+      if (data.clientId) document.getElementById('client-id').value = data.clientId;
+      // Client secret is never returned from the server — if credentials are locked
+      // (set via env vars), disable the fields since the server ignores them anyway.
+      if (data.credentialsLocked) {
+        const cidEl = document.getElementById('client-id');
+        const csEl  = document.getElementById('client-secret');
+        cidEl.disabled = true;
+        csEl.disabled  = true;
+        csEl.placeholder = data.hasClientSecret ? '(set via environment)' : 'Not configured';
+      }
       if (data.authorized) {
         const el = document.getElementById('auth-status');
         el.textContent = '✓ Authorized';

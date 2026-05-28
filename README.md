@@ -26,12 +26,13 @@ Codes are assigned one-to-one in spreadsheet order (row 1 DJ → row 1 code, etc
 | Runtime | Node.js 20 |
 | Framework | Express |
 | File parsing | xlsx (SheetJS) — handles `.xlsx` and `.csv` |
-| File uploads | multer (memory storage) |
+| File uploads | multer (memory storage, 10 MB limit) |
 | Email sending | Gmail API (via OAuth2, no SMTP) |
 | Session auth | express-session + Google OAuth (restricted to `@midnightecstasy.com`) |
 | Secret storage | Google Cloud Secret Manager |
 | Token storage | Local `config.json` (dev) / Google Cloud Storage (production) |
 | Hosting | Google Cloud Run |
+| Tests | Node.js built-in `node:test` (no extra dependencies) |
 
 ---
 
@@ -40,8 +41,11 @@ Codes are assigned one-to-one in spreadsheet order (row 1 DJ → row 1 code, etc
 ```
 promo-mailer/
 ├── server.js           # Express backend — all API routes and auth
+├── utils.js            # Pure helper functions (escaping, template, parsing)
 ├── public/
 │   └── index.html      # Single-page frontend (HTML + CSS + JS)
+├── test/
+│   └── utils.test.js   # Unit tests — run with: npm test
 ├── test-data/
 │   ├── dj-list.csv     # 10 fake DJs all pointing to hannahzaydman@gmail.com
 │   └── download-codes.csv
@@ -50,6 +54,17 @@ promo-mailer/
 ├── package.json
 └── config.json         # Auto-generated locally — stores Gmail tokens only (never commit this)
 ```
+
+---
+
+## Running Tests
+
+```bash
+cd ~/promo-mailer
+npm test
+```
+
+Uses Node's built-in test runner — no `npm install` required for tests. Covers `escHtml`, `sanitizeMimeHeader`, `htmlToPlainText`, `applyTemplate`, and `parseDjList`.
 
 ---
 

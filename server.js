@@ -8,7 +8,30 @@ const session = require('express-session');
 const app = express();
 app.set('trust proxy', 1); // Required for secure cookies behind Cloud Run
 
-const upload = multer({ storage: multer.memoryStorage() });
+// ── Security headers ───────────────────────────────────────────────────────
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  // CSP: inline scripts/styles are required by the single-file frontend.
+  // frame-ancestors, object-src, and base-uri still provide meaningful protection.
+  res.setHeader('Content-Security-Policy', [
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline'",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src https://fonts.gstatic.com",
+    "connect-src 'self' https://accounts.google.com",
+    "img-src 'self' data:",
+    "frame-ancestors 'none'",
+    "object-src 'none'",
+    "base-uri 'self'",
+  ].join('; '));
+  next();
+});
+
+const { escHtml, sanitizeMimeHeader, htmlToPlainText, applyTemplate, parseDjList } = require('./utils');
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 // ── Config ─────────────────────────────────────────────────────────────────
 const PORT           = process.env.PORT           || 5001;
@@ -16,6 +39,11 @@ const BASE_URL       = process.env.BASE_URL        || `http://localhost:${PORT}`
 const BUCKET_NAME    = process.env.BUCKET_NAME;
 const ALLOWED_DOMAIN = process.env.ALLOWED_DOMAIN  || 'midnightecstasy.com';
 const SESSION_SECRET = process.env.SESSION_SECRET  || 'local-dev-secret-change-in-prod';
+
+if (BASE_URL.startsWith('https') && SESSION_SECRET === 'local-dev-secret-change-in-prod') {
+  console.error('FATAL: SESSION_SECRET env var is not set. Refusing to start in production.');
+  process.exit(1);
+}
 
 // OAuth credentials — from Secret Manager env vars in prod, config file locally
 const GOOGLE_CLIENT_ID     = process.env.GOOGLE_CLIENT_ID;
@@ -119,7 +147,7 @@ const LOGIN_PAGE = (msg = '') => `<!DOCTYPE html>
   <h1>Promo Mailer</h1>
   <p>Sign in with your ${ALLOWED_DOMAIN} account to continue.</p>
   <a href="/auth/login/google">Sign in with Google</a>
-  ${msg ? `<p class="err">${msg}</p>` : ''}
+  ${msg ? `<p class="err">${escHtml(msg)}</p>` : ''}
 </div></body></html>`;
 
 app.get('/auth/login', (req, res) => {
@@ -215,7 +243,7 @@ app.get('/auth/callback', async (req, res) => {
 
   if (error) {
     return res.send(`<html><body style="${style}#ff5c5c">
-      <p>Authorization failed: ${error}</p><p>Close this tab and try again.</p>
+      <p>Authorization failed: ${escHtml(error)}</p><p>Close this tab and try again.</p>
     </body></html>`);
   }
 
@@ -256,7 +284,8 @@ app.get('/auth/status', (_req, res) => res.json({ authorized: !!oauthConfig.toke
 
 app.get('/auth/config', (_req, res) => res.json({
   clientId:          getClientId()     || '',
-  clientSecret:      getClientSecret() || '',
+  // Never expose the client secret to the browser — return only whether it's set
+  hasClientSecret:   !!(getClientSecret()),
   credentialsLocked: !!(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET),
   authorized:        !!oauthConfig.tokens,
 }));
@@ -286,16 +315,14 @@ async function getAccessToken() {
 }
 
 async function sendGmail(accessToken, from, to, subject, htmlBody) {
+  // Strip newlines from header values to prevent MIME header injection
+  from    = sanitizeMimeHeader(from);
+  to      = sanitizeMimeHeader(to);
+  subject = sanitizeMimeHeader(subject);
+
   const boundary = 'mp_' + Date.now().toString(36);
 
-  // Plain text fallback: strip HTML tags
-  const textBody = htmlBody
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/p>/gi, '\n\n')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, ' ')
-    .trim();
+  const textBody = htmlToPlainText(htmlBody);
 
   const mime = [
     `From: ${from}`,
@@ -331,14 +358,6 @@ async function sendGmail(accessToken, from, to, subject, htmlBody) {
   }
 }
 
-function escHtml(s) {
-  return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
 // ── Spreadsheet endpoints ──────────────────────────────────────────────────
 function readSpreadsheet(buffer) {
   const wb    = XLSX.read(buffer, { type: 'buffer' });
@@ -358,7 +377,7 @@ app.post('/get-columns', upload.single('dj_file'), (req, res) => {
   }
 });
 
-const previewUpload = multer({ storage: multer.memoryStorage() }).fields([
+const previewUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } }).fields([
   { name: 'dj_file', maxCount: 1 },
   ...Array.from({ length: 10 }, (_, i) => ({ name: `codes_file_${i}`, maxCount: 1 })),
 ]);
@@ -372,9 +391,7 @@ app.post('/preview', previewUpload, (req, res) => {
     const djFileInfo = req.files['dj_file']?.[0];
     if (!djFileInfo) return res.status(400).json({ error: 'DJ file missing' });
 
-    const djList = readSpreadsheet(djFileInfo.buffer)
-      .map(r => ({ name: String(r[name_col] ?? '').trim(), email: String(r[email_col] ?? '').trim() }))
-      .filter(r => r.name && r.email);
+    const djList = parseDjList(readSpreadsheet(djFileInfo.buffer), name_col, email_col);
 
     if (!djList.length) return res.status(400).json({ error: 'No valid DJ rows found' });
 
@@ -402,9 +419,15 @@ app.post('/preview', previewUpload, (req, res) => {
         name,
         count: djList.length,
         emails: djList.map((dj, j) => {
-          const code    = codes[j];
-          const replace = s => s.replace(/\{name\}/g, escHtml(dj.name)).replace(/\{code\}/g, escHtml(code));
-          return { name: dj.name, email: dj.email, code, subject: replace(subject), body: replace(body), release: name };
+          const code = codes[j];
+          return {
+            name:    dj.name,
+            email:   dj.email,
+            code,
+            subject: applyTemplate(subject, dj.name, code),
+            body:    applyTemplate(body,    dj.name, code),
+            release: name,
+          };
         }),
       });
     }

@@ -229,72 +229,10 @@ app.get('/auth/logout', (req, res) => {
 app.use(requireAuth);
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ── Gmail send OAuth ───────────────────────────────────────────────────────
-// Separate OAuth flow for gmail.send scope — tokens live in the session only.
-// The same Google Cloud OAuth client is reused; add /auth/gmail/callback to
-// the "Authorized redirect URIs" in Google Cloud Console.
-
-app.post('/auth/gmail/setup', (req, res) => {
-  if (!GOOGLE_CLIENT_ID)
-    return res.status(501).json({ error: 'Google OAuth not configured.' });
-  const state = crypto.randomBytes(32).toString('hex');
-  req.session.gmailOAuthState = state;
-  const params = new URLSearchParams({
-    client_id:     GOOGLE_CLIENT_ID,
-    redirect_uri:  `${BASE_URL}/auth/gmail/callback`,
-    response_type: 'code',
-    scope:         'https://www.googleapis.com/auth/gmail.send',
-    access_type:   'offline',
-    prompt:        'consent',
-    state,
-  });
-  res.json({ authUrl: `https://accounts.google.com/o/oauth2/v2/auth?${params}` });
-});
-
-app.get('/auth/gmail/callback', async (req, res) => {
-  const { code, error, state } = req.query;
-  if (error) return res.send(`<script>window.opener?.postMessage('gmail-error','*');window.close();</script>`);
-
-  const expectedState = req.session.gmailOAuthState;
-  delete req.session.gmailOAuthState;
-  if (!state || !expectedState || state !== expectedState)
-    return res.send(`<script>window.opener?.postMessage('gmail-error','*');window.close();</script>`);
-
-  try {
-    const tokenRes = await fetchWithTimeout('https://oauth2.googleapis.com/token', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        client_id:     GOOGLE_CLIENT_ID,
-        client_secret: GOOGLE_CLIENT_SECRET,
-        code,
-        grant_type:    'authorization_code',
-        redirect_uri:  `${BASE_URL}/auth/gmail/callback`,
-      }),
-    });
-    const tokens = await tokenRes.json();
-    if (tokens.error) throw new Error(tokens.error_description || tokens.error);
-    req.session.gmailTokens = {
-      access_token:  tokens.access_token,
-      refresh_token: tokens.refresh_token,
-      expiry:        Date.now() + (tokens.expires_in || 3600) * 1000,
-    };
-    res.send(`<script>window.opener?.postMessage('gmail-authorized','*');window.close();</script>`);
-  } catch (e) {
-    res.send(`<script>window.opener?.postMessage('gmail-error','*');window.close();</script>`);
-  }
-});
-
-app.get('/auth/gmail/status', (req, res) => {
-  res.json({
-    authorized: !!(req.session.gmailTokens?.access_token),
-    hasOAuth:   !!GOOGLE_CLIENT_ID,
-  });
-});
-
-app.post('/auth/gmail/revoke', (req, res) => {
-  delete req.session.gmailTokens;
-  res.json({ ok: true });
+// ── Auth info ──────────────────────────────────────────────────────────────
+app.get('/auth/me', (req, res) => {
+  if (!req.session?.user) return res.status(401).json({ error: 'Not authenticated' });
+  res.json({ email: req.session.user.email, name: req.session.user.name });
 });
 
 async function getGmailAccessToken(session) {
@@ -421,24 +359,50 @@ app.post('/preview', previewUpload, (req, res) => {
     if (count === 0) return res.status(400).json({ error: 'No releases provided' });
 
     const recipientFileInfo = req.files['recipient_file']?.[0];
-    if (!recipientFileInfo) return res.status(400).json({ error: 'Recipient file missing' });
+
+    // Parse extra (manually entered) recipients sent as JSON
+    let extraRecipients = [];
+    if (req.body.extra_recipients) {
+      try {
+        const parsed = JSON.parse(req.body.extra_recipients);
+        if (Array.isArray(parsed)) {
+          extraRecipients = parsed
+            .filter(r => r && typeof r.name === 'string' && typeof r.email === 'string')
+            .map(r => ({ name: r.name.trim(), email: r.email.trim() }))
+            .filter(r => r.name && r.email && r.email.includes('@'));
+        }
+      } catch { /* ignore malformed JSON */ }
+    }
+
+    if (!recipientFileInfo && extraRecipients.length === 0) {
+      return res.status(400).json({ error: 'No recipients provided. Upload a recipient file or add recipients manually.' });
+    }
 
     const warnings = [];
 
-    // Parse recipient list and warn if rows were silently dropped
-    const rawRecipientRows = readSpreadsheet(recipientFileInfo.buffer);
+    let recipientList = [];
 
-    const recipientColErr = validateColumns(rawRecipientRows, [name_col, email_col]);
-    if (recipientColErr) return res.status(400).json({ error: 'Recipient file: ' + recipientColErr });
+    if (recipientFileInfo) {
+      // Parse recipient list and warn if rows were silently dropped
+      const rawRecipientRows = readSpreadsheet(recipientFileInfo.buffer);
 
-    const recipientList = parseRecipientList(rawRecipientRows, name_col, email_col);
+      const recipientColErr = validateColumns(rawRecipientRows, [name_col, email_col]);
+      if (recipientColErr) return res.status(400).json({ error: 'Recipient file: ' + recipientColErr });
+
+      const fromFile = parseRecipientList(rawRecipientRows, name_col, email_col);
+
+      const dropped = rawRecipientRows.length - fromFile.length;
+      if (dropped > 0) {
+        warnings.push(`${dropped} recipient row${dropped !== 1 ? 's' : ''} were skipped (blank, missing name/email, or invalid email format). If you prepared your codes file to align row-for-row, the assignment order may be off.`);
+      }
+
+      recipientList = fromFile;
+    }
+
+    // Append manually entered recipients
+    recipientList = recipientList.concat(extraRecipients);
 
     if (!recipientList.length) return res.status(400).json({ error: 'No valid recipients found. Check that the correct name and email columns are selected, and that email addresses contain @.' });
-
-    const dropped = rawRecipientRows.length - recipientList.length;
-    if (dropped > 0) {
-      warnings.push(`${dropped} recipient row${dropped !== 1 ? 's' : ''} were skipped (blank, missing name/email, or invalid email format). If you prepared your codes file to align row-for-row, the assignment order may be off.`);
-    }
 
     // Warn about duplicate email addresses in the recipient list
     const emailCount = {};
@@ -518,76 +482,34 @@ app.post('/send', async (req, res) => {
     return res.status(429).json({ error: 'Too many requests. Please wait a moment before sending again.' });
   }
 
-  const { smtp_host, smtp_port, smtp_user, smtp_pass, from_name, emails } = req.body;
-  if (!smtp_user)      return res.status(400).json({ error: 'Email address is required' });
+  if (!req.session.gmailTokens)
+    return res.status(401).json({ error: 'Gmail not authorized. Please sign out and sign in again.' });
+
+  const { from_name, emails } = req.body;
   if (!emails?.length) return res.status(400).json({ error: 'No emails to send' });
 
-  // Input length validation — prevents oversized strings from reaching the
-  // SMTP transport or appearing in logs.
-  const lenErr = validateInputLengths({
-    'from_name': { value: from_name, max: 200 },
-    'smtp_host': { value: smtp_host, max: 253 },
-    'smtp_user': { value: smtp_user, max: 254 },
-    'smtp_pass': { value: smtp_pass, max: 256 },
-  });
+  const lenErr = validateInputLengths({ 'from_name': { value: from_name, max: 200 } });
   if (lenErr) return res.status(400).json({ error: lenErr });
 
-  const fromAddr = from_name?.trim()
-    ? `"${from_name.trim().replace(/"/g, "'")}" <${smtp_user}>`
-    : smtp_user;
+  const fromEmail = req.session.user.email;
+  const fromAddr  = from_name?.trim()
+    ? `"${from_name.trim().replace(/"/g, "'")}" <${fromEmail}>`
+    : fromEmail;
 
   const sent = [], failed = [];
-
-  // ── Gmail API path (when user has authorized via Sign in with Google) ──────
-  if (req.session.gmailTokens) {
-    for (let i = 0; i < emails.length; i++) {
-      const item = emails[i];
-      try {
-        const token = await getGmailAccessToken(req.session);
-        await sendViaGmail(token, fromAddr, sanitizeMimeHeader(item.email), sanitizeMimeHeader(item.subject), item.body);
-        sent.push(item.email);
-      } catch (e) {
-        failed.push({ email: item.email, error: redactCredentials(e.message, GOOGLE_CLIENT_SECRET) });
-        if (isFatalGmailError(e.message)) {
-          for (let j = i + 1; j < emails.length; j++)
-            failed.push({ email: emails[j].email, error: 'Aborted — see previous error' });
-          return res.json({ sent, failed, aborted: true, abortReason: redactCredentials(e.message, GOOGLE_CLIENT_SECRET) });
-        }
-      }
-    }
-    return res.json({ sent, failed });
-  }
-
-  // ── SMTP path ─────────────────────────────────────────────────────────────
-  if (!smtp_host || !smtp_pass)
-    return res.status(400).json({ error: 'SMTP host and password are required' });
-
-  const transport = nodemailer.createTransport({
-    host:              smtp_host,
-    port:              parseInt(smtp_port) || 587,
-    secure:            false,
-    auth:              { user: smtp_user, pass: smtp_pass },
-    connectionTimeout: 10_000, // abort if TCP connect takes > 10s (e.g. unrouteable IP)
-    greetingTimeout:   10_000, // abort if server doesn't send SMTP greeting within 10s
-  });
 
   for (let i = 0; i < emails.length; i++) {
     const item = emails[i];
     try {
-      await transport.sendMail({
-        from:    fromAddr,
-        to:      sanitizeMimeHeader(item.email),
-        subject: sanitizeMimeHeader(item.subject),
-        text:    htmlToPlainText(item.body),
-        html:    `<!DOCTYPE html><html><body style="font-family:sans-serif;font-size:14px;line-height:1.6;color:#333;max-width:600px">${item.body}</body></html>`,
-      });
+      const token = await getGmailAccessToken(req.session);
+      await sendViaGmail(token, fromAddr, sanitizeMimeHeader(item.email), sanitizeMimeHeader(item.subject), item.body);
       sent.push(item.email);
     } catch (e) {
-      failed.push({ email: item.email, error: redactCredentials(e.message, smtp_pass) });
-      if (isFatalSmtpError(e.message)) {
+      failed.push({ email: item.email, error: redactCredentials(e.message, GOOGLE_CLIENT_SECRET) });
+      if (isFatalGmailError(e.message)) {
         for (let j = i + 1; j < emails.length; j++)
           failed.push({ email: emails[j].email, error: 'Aborted — see previous error' });
-        return res.json({ sent, failed, aborted: true, abortReason: redactCredentials(e.message, smtp_pass) });
+        return res.json({ sent, failed, aborted: true, abortReason: redactCredentials(e.message, GOOGLE_CLIENT_SECRET) });
       }
     }
   }

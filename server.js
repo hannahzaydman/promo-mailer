@@ -42,9 +42,8 @@ const BASE_URL       = process.env.BASE_URL        || `http://localhost:${PORT}`
 const ALLOWED_DOMAIN = process.env.ALLOWED_DOMAIN  || 'midnightecstasy.com';
 const SESSION_SECRET = process.env.SESSION_SECRET  || 'local-dev-secret-change-in-prod';
 
-// Escape literal dots so the domain pattern isn't a wildcard.
-const ALLOWED_DOMAIN_RE = new RegExp('@' + ALLOWED_DOMAIN.split('.').join('\\.') + '
-
+// Escape literal dots so the domain name doesn't act as a wildcard in the regex.
+const ALLOWED_DOMAIN_RE = new RegExp('@' + ALLOWED_DOMAIN.split('.').join('\\.') + '$', 'i');
 if (BASE_URL.startsWith('https') && SESSION_SECRET === 'local-dev-secret-change-in-prod') {
   console.error('FATAL: SESSION_SECRET env var is not set. Refusing to start in production.');
   process.exit(1);
@@ -80,6 +79,16 @@ function requireAuth(req, res, next) {
   if (!GOOGLE_CLIENT_ID) return next();
 
   res.redirect('/auth/login');
+}
+
+// fetch() with an AbortController timeout — prevents Google OAuth calls from hanging
+// indefinitely and exhausting Cloud Run connections.
+function fetchWithTimeout(url, options, ms) {
+  if (ms === undefined) ms = 10000;
+  const ctrl = new AbortController();
+  const t = setTimeout(function() { ctrl.abort(); }, ms);
+  return fetch(url, Object.assign({}, options || {}, { signal: ctrl.signal }))
+    .finally(function() { clearTimeout(t); });
 }
 
 // ── Google login routes ────────────────────────────────────────────────────
@@ -279,280 +288,6 @@ app.post('/preview', previewUpload, (req, res) => {
       const codesColErr = validateColumns(rawCodeRows, [codesCol], name);
       if (codesColErr) return res.status(400).json({ error: codesColErr });
 
-      const codes = rawCodeRows.map(r => String(r[codesCol] ?? '').trim()).filter(Boolean);
-
-      // Warn if blank rows were dropped from the codes file (row-alignment risk)
-      const codesDropped = rawCodeRows.length - codes.length;
-      if (codesDropped > 0) {
-        warnings.push(`"${name}": ${codesDropped} empty row${codesDropped !== 1 ? 's' : ''} skipped in codes file — row order may not match your recipient list.`);
-      }
-
-      if (codes.length < recipientList.length) {
-        return res.status(400).json({
-          error: `"${name}": not enough codes (${codes.length}) for all recipients (${recipientList.length}).`
-        });
-      }
-
-      releases.push({
-        name,
-        count: recipientList.length,
-        emails: recipientList.map((recipient, j) => {
-          const code = codes[j];
-          return {
-            name:    recipient.name,
-            email:   recipient.email,
-            code,
-            subject: applyTemplate(subject, recipient.name, code),
-            body:    applyTemplate(body,    recipient.name, code),
-            release: name,
-          };
-        }),
-      });
-    }
-
-    const allEmails = releases.flatMap(r => r.emails);
-    res.json({ releases, allEmails, total: allEmails.length, warnings });
-  } catch (e) {
-    res.status(400).json({ error: e.message });
-  }
-});
-
-// ── Send ───────────────────────────────────────────────────────────────────
-app.post('/send', async (req, res) => {
-  const { smtp_host, smtp_port, smtp_user, smtp_pass, from_name, emails } = req.body;
-  if (!smtp_host || !smtp_user || !smtp_pass)
-    return res.status(400).json({ error: 'SMTP host, username, and password are required' });
-  if (!emails?.length)
-    return res.status(400).json({ error: 'No emails to send' });
-
-  // Construct From header: "Display Name" <email> or just email
-  const fromAddr = from_name?.trim()
-    ? `"${from_name.trim().replace(/"/g, "'")}" <${smtp_user}>`
-    : smtp_user;
-
-  const transport = nodemailer.createTransport({
-    host:   smtp_host,
-    port:   parseInt(smtp_port) || 587,
-    secure: false,
-    auth:   { user: smtp_user, pass: smtp_pass },
-  });
-
-  const sent = [], failed = [];
-  for (let i = 0; i < emails.length; i++) {
-    const item = emails[i];
-    try {
-      await transport.sendMail({
-        from:    fromAddr,
-        to:      sanitizeMimeHeader(item.email),
-        subject: sanitizeMimeHeader(item.subject),
-        text:    htmlToPlainText(item.body),
-        html:    `<!DOCTYPE html><html><body style="font-family:sans-serif;font-size:14px;line-height:1.6;color:#333;max-width:600px">${item.body}</body></html>`,
-      });
-      sent.push(item.email);
-    } catch (e) {
-      failed.push({ email: item.email, error: e.message });
-      // Auth failures and quota errors won't resolve by retrying — abort the
-      // rest of the batch immediately rather than accumulating identical failures.
-      if (isFatalSmtpError(e.message)) {
-        for (let j = i + 1; j < emails.length; j++) {
-          failed.push({ email: emails[j].email, error: 'Aborted — see previous error' });
-        }
-        return res.json({ sent, failed, aborted: true, abortReason: e.message });
-      }
-    }
-  }
-  res.json({ sent, failed });
-});
-
-app.listen(PORT, () => console.log(`Promo Mailer running at ${BASE_URL}`));
-, 'i');
-
-// fetch() with an AbortController timeout — prevents Google OAuth calls from hanging.
-function fetchWithTimeout(url, options, ms) {
-  if (ms === undefined) ms = 10000;
-  const ctrl = new AbortController();
-  const t = setTimeout(function() { ctrl.abort(); }, ms);
-  return fetch(url, Object.assign({}, options || {}, { signal: ctrl.signal }))
-    .finally(function() { clearTimeout(t); });
-}
-
-if (BASE_URL.startsWith('https') && SESSION_SECRET === 'local-dev-secret-change-in-prod') {
-  console.error('FATAL: SESSION_SECRET env var is not set. Refusing to start in production.');
-  process.exit(1);
-}
-
-// OAuth credentials — from Secret Manager env vars in prod, config file locally
-const GOOGLE_CLIENT_ID     = process.env.GOOGLE_CLIENT_ID;
-const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
-
-// ── Session ────────────────────────────────────────────────────────────────
-app.use(session({
-  store:             new FirestoreStore(),
-  secret:            SESSION_SECRET,
-  resave:            false,
-  saveUninitialized: false,
-  cookie: {
-    secure:   BASE_URL.startsWith('https'),
-    httpOnly: true,
-    sameSite: 'lax',
-    maxAge:   8 * 60 * 60 * 1000, // 8 hours
-  },
-}));
-
-app.use(express.json());
-
-// ── Google login middleware ────────────────────────────────────────────────
-function requireAuth(req, res, next) {
-  // Allow login flow through unauthenticated
-  if (req.path.startsWith('/auth/login')) return next();
-  if (req.session?.user) return next();
-
-  // No Google credentials configured — let through so app is accessible
-  if (!GOOGLE_CLIENT_ID) return next();
-
-  res.redirect('/auth/login');
-}
-
-// ── Google login routes ────────────────────────────────────────────────────
-const LOGIN_PAGE = (msg = '') => `<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><title>Promo Mailer</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;700;800&display=swap" rel="stylesheet">
-<style>
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{background:#0c0b10;color:#f0eef8;font-family:'Syne',sans-serif;
-       display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:20px}
-  .card{background:#131118;border:1px solid #2a2635;padding:40px 36px;
-        text-align:center;max-width:360px;width:100%}
-  .logo{width:64px;height:64px;object-fit:cover;display:block;margin:0 auto 20px}
-  h1{font-size:1.4rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#f0eef8;margin-bottom:6px;line-height:1}
-  .sub{color:#8a8499;font-size:.68rem;letter-spacing:.2em;text-transform:uppercase;font-weight:500;margin-bottom:24px}
-  p{color:#8a8499;font-size:.82rem;margin-bottom:28px;line-height:1.6}
-  a{display:inline-flex;align-items:center;gap:10px;background:#4455ff;color:#ffffff;
-    font-weight:700;font-size:.68rem;letter-spacing:.14em;text-transform:uppercase;
-    border-radius:0;padding:13px 28px;text-decoration:none;font-family:'Syne',sans-serif;
-    transition:background .15s}
-  a:hover{background:#6673ff}
-  .err{color:#ff4455;font-size:.78rem;margin-top:16px;letter-spacing:.04em}
-  footer{margin-top:32px;font-size:.6rem;letter-spacing:.18em;text-transform:uppercase;color:#4d4a5a}
-</style></head>
-<body><div class="card">
-  <img src="https://f4.bcbits.com/img/0042095815_10.jpg" class="logo" alt="Midnight Ecstasy" />
-  <h1>Promo Mailer</h1>
-  <div class="sub">Upload · Compose · Send</div>
-  <p>Sign in with your ${ALLOWED_DOMAIN} account to continue.</p>
-  <a href="/auth/login/google">Sign in with Google</a>
-  ${msg ? `<p class="err">${escHtml(msg)}</p>` : ''}
-</div>
-<footer>a tool by midnight ecstasy</footer>
-</body></html>`;
-
-app.get('/auth/login', (req, res) => {
-  res.send(LOGIN_PAGE(req.query.error || ''));
-});
-
-app.get('/auth/login/google', (req, res) => {
-  if (!GOOGLE_CLIENT_ID) return res.send(LOGIN_PAGE('OAuth not configured. Set GOOGLE_CLIENT_ID env var.'));
-
-  const params = new URLSearchParams({
-    client_id:     GOOGLE_CLIENT_ID,
-    redirect_uri:  `${BASE_URL}/auth/login/callback`,
-    response_type: 'code',
-    scope:         'openid email profile',
-    access_type:   'online',
-  });
-  res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params}`);
-});
-
-app.get('/auth/logout', (req, res) => {
-  req.session.destroy(() => res.redirect('/auth/login'));
-});
-
-// Apply auth middleware to all subsequent routes
-app.use(requireAuth);
-app.use(express.static(path.join(__dirname, 'public')));
-
-// ── Spreadsheet endpoints ──────────────────────────────────────────────────
-function readSpreadsheet(buffer) {
-  const wb    = XLSX.read(buffer, { type: 'buffer' });
-  const sheet = wb.Sheets[wb.SheetNames[0]];
-  const rows  = XLSX.utils.sheet_to_json(sheet, { defval: '' });
-  // Strip UTF-8 BOM from column names — common in Windows/Excel CSV exports.
-  // Without this, the first column is named '\uFEFFname' instead of 'name',
-  // breaking auto-detection and column matching silently.
-  if (rows.length === 0) return rows;
-  const hasBom = Object.keys(rows[0]).some(k => k.startsWith('\uFEFF'));
-  if (!hasBom) return rows;
-  return rows.map(row => {
-    const cleaned = {};
-    for (const [key, val] of Object.entries(row)) {
-      cleaned[key.replace(/^\uFEFF/, '')] = val;
-    }
-    return cleaned;
-  });
-}
-
-app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
-
-app.post('/get-columns', upload.single('recipient_file'), (req, res) => {
-  try {
-    const rows = readSpreadsheet(req.file.buffer);
-    if (!rows.length) return res.json({ error: 'File appears to be empty' });
-    res.json({ columns: Object.keys(rows[0]) });
-  } catch (e) {
-    res.status(400).json({ error: `Could not read file: ${e.message}` });
-  }
-});
-
-const previewUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } }).fields([
-  { name: 'recipient_file', maxCount: 1 },
-  ...Array.from({ length: 10 }, (_, i) => ({ name: `codes_file_${i}`, maxCount: 1 })),
-]);
-
-app.post('/preview', previewUpload, (req, res) => {
-  try {
-    const { name_col, email_col, release_count } = req.body;
-    // Cap at 10 to match the UI limit and prevent runaway iteration
-    const count = Math.min(parseInt(release_count) || 0, 10);
-    if (count === 0) return res.status(400).json({ error: 'No releases provided' });
-
-    const recipientFileInfo = req.files['recipient_file']?.[0];
-    if (!recipientFileInfo) return res.status(400).json({ error: 'Recipient file missing' });
-
-    const warnings = [];
-
-    // Parse recipient list and warn if rows were silently dropped
-    const rawRecipientRows = readSpreadsheet(recipientFileInfo.buffer);
-    const recipientList    = parseRecipientList(rawRecipientRows, name_col, email_col);
-
-    if (!recipientList.length) return res.status(400).json({ error: 'No valid recipients found. Check that the correct name and email columns are selected, and that email addresses contain @.' });
-
-    const dropped = rawRecipientRows.length - recipientList.length;
-    if (dropped > 0) {
-      warnings.push(`${dropped} recipient row${dropped !== 1 ? 's' : ''} were skipped (blank, missing name/email, or invalid email format). If you prepared your codes file to align row-for-row, the assignment order may be off.`);
-    }
-
-    // Warn about duplicate email addresses in the recipient list
-    const emailCount = {};
-    recipientList.forEach(recipient => { emailCount[recipient.email] = (emailCount[recipient.email] || 0) + 1; });
-    const dupes = Object.keys(emailCount).filter(e => emailCount[e] > 1);
-    if (dupes.length > 0) {
-      const preview = dupes.slice(0, 3).join(', ') + (dupes.length > 3 ? '…' : '');
-      warnings.push(`${dupes.length} duplicate email address${dupes.length !== 1 ? 'es' : ''} found — those recipients will receive multiple emails: ${preview}`);
-    }
-
-    const releases = [];
-    for (let i = 0; i < count; i++) {
-      const codesFile = req.files[`codes_file_${i}`]?.[0];
-      if (!codesFile) return res.status(400).json({ error: `Missing codes file for release ${i + 1}` });
-
-      const codesCol = req.body[`codes_col_${i}`];
-      const subject  = req.body[`subject_${i}`] || '';
-      const body     = req.body[`body_${i}`] || '';
-      const name     = req.body[`release_name_${i}`] || `Release ${i + 1}`;
-
-      const rawCodeRows = readSpreadsheet(codesFile.buffer);
       const codes = rawCodeRows.map(r => String(r[codesCol] ?? '').trim()).filter(Boolean);
 
       // Warn if blank rows were dropped from the codes file (row-alignment risk)

@@ -108,4 +108,21 @@ function isFatalSmtpError(message) {
   return FATAL_SMTP_ERRORS.some(pat => lower.includes(pat));
 }
 
-module.exports = { escHtml, sanitizeMimeHeader, htmlToPlainText, applyTemplate, parseRecipientList, isFatalSmtpError };
+
+/**
+ * Verify that every required column name exists in spreadsheet rows.
+ * Returns null on success, or an error string naming the first missing column.
+ */
+function validateColumns(rows, required, context) {
+  if (!rows || rows.length === 0) return null;
+  const available = Object.keys(rows[0]);
+  for (const col of required) {
+    if (!available.includes(col)) {
+      const prefix = context ? ('"' + context + '": ') : '';
+      return prefix + 'column "' + col + '" not found. Available columns: ' + available.join(', ');
+    }
+  }
+  return null;
+}
+
+module.exports = { escHtml, sanitizeMimeHeader, htmlToPlainText, applyTemplate, parseRecipientList, isFatalSmtpError , validateColumns };

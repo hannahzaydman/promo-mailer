@@ -3,7 +3,8 @@ const multer  = require('multer');
 const XLSX    = require('xlsx');
 const path    = require('path');
 const fs      = require('fs');
-const session = require('express-session');
+const session        = require('express-session');
+const FirestoreStore = require('./firestoreSessionStore')(session);
 
 const app = express();
 app.set('trust proxy', 1); // Required for secure cookies behind Cloud Run
@@ -51,6 +52,7 @@ const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
 
 // ── Session ────────────────────────────────────────────────────────────────
 app.use(session({
+  store:             new FirestoreStore(),
   secret:            SESSION_SECRET,
   resave:            false,
   saveUninitialized: false,
@@ -130,25 +132,37 @@ loadConfig();
 // ── Google login routes ────────────────────────────────────────────────────
 const LOGIN_PAGE = (msg = '') => `<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><title>Promo Mailer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;700;800&display=swap" rel="stylesheet">
 <style>
-  body{background:#0e0e0e;color:#f0f0f0;font-family:'Helvetica Neue',sans-serif;
-       display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}
-  .card{background:#1a1a1a;border:1px solid #2e2e2e;border-radius:8px;padding:40px;
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#0c0b10;color:#f0eef8;font-family:'Syne',sans-serif;
+       display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:20px}
+  .card{background:#131118;border:1px solid #2a2635;padding:40px 36px;
         text-align:center;max-width:360px;width:100%}
-  h1{font-size:1.2rem;letter-spacing:.12em;text-transform:uppercase;color:#c8f135;margin-bottom:8px}
-  p{color:#888;font-size:.85rem;margin-bottom:28px;line-height:1.5}
-  a{display:inline-flex;align-items:center;gap:10px;background:#c8f135;color:#0e0e0e;
-    font-weight:700;font-size:.8rem;letter-spacing:.1em;text-transform:uppercase;
-    border-radius:5px;padding:12px 24px;text-decoration:none}
-  a:hover{background:#d9ff4a}
-  .err{color:#ff5c5c;font-size:.8rem;margin-top:16px}
+  .logo{width:64px;height:64px;object-fit:cover;display:block;margin:0 auto 20px}
+  h1{font-size:1.4rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#f0eef8;margin-bottom:6px;line-height:1}
+  .sub{color:#8a8499;font-size:.68rem;letter-spacing:.2em;text-transform:uppercase;font-weight:500;margin-bottom:24px}
+  p{color:#8a8499;font-size:.82rem;margin-bottom:28px;line-height:1.6}
+  a{display:inline-flex;align-items:center;gap:10px;background:#4455ff;color:#ffffff;
+    font-weight:700;font-size:.68rem;letter-spacing:.14em;text-transform:uppercase;
+    border-radius:0;padding:13px 28px;text-decoration:none;font-family:'Syne',sans-serif;
+    transition:background .15s}
+  a:hover{background:#6673ff}
+  .err{color:#ff4455;font-size:.78rem;margin-top:16px;letter-spacing:.04em}
+  footer{margin-top:32px;font-size:.6rem;letter-spacing:.18em;text-transform:uppercase;color:#4d4a5a}
 </style></head>
 <body><div class="card">
+  <img src="https://f4.bcbits.com/img/0042095815_10.jpg" class="logo" alt="Midnight Ecstasy" />
   <h1>Promo Mailer</h1>
+  <div class="sub">Upload · Compose · Send</div>
   <p>Sign in with your ${ALLOWED_DOMAIN} account to continue.</p>
   <a href="/auth/login/google">Sign in with Google</a>
   ${msg ? `<p class="err">${escHtml(msg)}</p>` : ''}
-</div></body></html>`;
+</div>
+<footer>a tool by midnight ecstasy</footer>
+</body></html>`;
 
 app.get('/auth/login', (req, res) => {
   res.send(LOGIN_PAGE(req.query.error || ''));

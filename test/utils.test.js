@@ -269,12 +269,13 @@ describe('parseRecipientList', () => {
     ]);
   });
 
-  test('filters out rows with a missing name', () => {
+  test('keeps rows with a missing name (name is optional)', () => {
     const rows = [
       { name: '',       email: 'one@test.com' },
       { name: 'DJ Two', email: 'two@test.com' },
     ];
     assert.deepEqual(parseRecipientList(rows, 'name', 'email'), [
+      { name: '',       email: 'one@test.com' },
       { name: 'DJ Two', email: 'two@test.com' },
     ]);
   });
@@ -286,9 +287,11 @@ describe('parseRecipientList', () => {
     ]);
   });
 
-  test('filters out rows where name is whitespace-only after trim', () => {
+  test('keeps rows where name is whitespace-only after trim (name is optional)', () => {
     const rows = [{ name: '   ', email: 'dj@test.com' }];
-    assert.deepEqual(parseRecipientList(rows, 'name', 'email'), []);
+    assert.deepEqual(parseRecipientList(rows, 'name', 'email'), [
+      { name: '', email: 'dj@test.com' },
+    ]);
   });
 
   test('handles null and undefined cell values without throwing', () => {
@@ -312,9 +315,11 @@ describe('parseRecipientList', () => {
     ]);
   });
 
-  test('silently drops all rows when column name does not exist', () => {
+  test('keeps rows when name column does not exist (name defaults to empty)', () => {
     const rows = [{ name: 'DJ Phantom', email: 'dj@test.com' }];
-    assert.deepEqual(parseRecipientList(rows, 'wrong_col', 'email'), []);
+    assert.deepEqual(parseRecipientList(rows, 'wrong_col', 'email'), [
+      { name: '', email: 'dj@test.com' },
+    ]);
   });
 
   test('filters out rows where email has no @ (e.g. Excel number-formatted cell)', () => {

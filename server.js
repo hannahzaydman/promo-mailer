@@ -494,17 +494,22 @@ function isFatalSendError(message) {
 
 // ── Send ───────────────────────────────────────────────────────────────────
 app.post('/send', async (req, res) => {
-  const { gmail_user, emails } = req.body;
+  const { gmail_user, from_name, emails } = req.body;
   if (!gmail_user)     return res.status(400).json({ error: 'Gmail address is required' });
   if (!oauthConfig.tokens) return res.status(401).json({ error: 'Not authorized with Gmail. Complete the OAuth setup first.' });
   if (!emails?.length) return res.status(400).json({ error: 'No emails to send' });
+
+  // Construct From header: "Display Name" <email> or just email
+  const fromAddr = from_name?.trim()
+    ? `"${from_name.trim().replace(/"/g, "'")}" <${gmail_user}>`
+    : gmail_user;
 
   const sent = [], failed = [];
   for (let i = 0; i < emails.length; i++) {
     const item = emails[i];
     try {
       const token = await getAccessToken();
-      await sendGmail(token, gmail_user, item.email, item.subject, item.body);
+      await sendGmail(token, fromAddr, item.email, item.subject, item.body);
       sent.push(item.email);
     } catch (e) {
       failed.push({ email: item.email, error: e.message });

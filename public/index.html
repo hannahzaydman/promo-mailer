@@ -494,6 +494,7 @@
     .btn-tmpl:hover { color: var(--text); border-color: #3a3a3a; background: var(--surface2); }
     .btn-tmpl-save { color: var(--accent); border-color: rgba(224,53,53,0.3); }
     .btn-tmpl-save:hover { background: rgba(224,53,53,0.04); border-color: var(--accent); color: var(--accent); }
+    .btn-tmpl-del:hover { color: var(--danger); border-color: var(--danger); background: rgba(255,92,92,0.04); }
 
     /* ── Rich text editor ────────────────────────────────────────────────────── */
     .rich-editor {
@@ -691,9 +692,15 @@
       </div>
     </div>
 
-    <div class="field">
-      <label>Your Gmail Address</label>
-      <input type="email" id="gmail-user" placeholder="you@yourworkspace.com" />
+    <div class="col-row">
+      <div class="field">
+        <label>From Name <span style="color:var(--muted);font-weight:400;letter-spacing:0">(optional)</span></label>
+        <input type="text" id="from-name" placeholder="e.g. Midnight Ecstasy" />
+      </div>
+      <div class="field">
+        <label>Your Gmail Address</label>
+        <input type="email" id="gmail-user" placeholder="you@yourworkspace.com" />
+      </div>
     </div>
 
     <div style="display:flex;align-items:center;gap:14px;margin-top:4px">
@@ -709,7 +716,10 @@
 
     <div class="preview-meta">
       <span class="count" id="preview-count"></span>
-      <button class="btn btn-secondary" id="step3-back">&larr; Back</button>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="btn btn-secondary" id="export-csv-btn" style="padding:7px 14px;font-size:0.72rem">Export CSV</button>
+        <button class="btn btn-secondary" id="step3-back">&larr; Back</button>
+      </div>
     </div>
 
     <div class="preview-wrap">
@@ -732,6 +742,9 @@
     <div class="actions">
       <button class="btn btn-secondary" id="test-send-btn">Send test to me</button>
       <button class="btn" id="send-btn">Send All Emails</button>
+    </div>
+    <div id="retry-wrap" style="display:none;margin-top:12px">
+      <button class="btn btn-secondary" id="retry-btn"></button>
     </div>
   </div>
 </div>
@@ -871,10 +884,18 @@
       names.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
   }
 
+  function deleteTemplate(name) {
+    const t = getTemplates();
+    delete t[name];
+    persistTemplates(t);
+    refreshAllTemplateSelects();
+  }
+
   function initTemplateBar(id) {
     const sel     = document.getElementById(`template-select-${id}`);
     const loadBtn = document.getElementById(`template-load-${id}`);
     const saveBtn = document.getElementById(`template-save-${id}`);
+    const delBtn  = document.getElementById(`template-del-${id}`);
     if (!sel || !loadBtn || !saveBtn) return;
 
     populateTemplateSelect(sel);
@@ -902,6 +923,15 @@
       // Select the just-saved template
       sel.value = name.trim();
     });
+
+    if (delBtn) {
+      delBtn.addEventListener('click', () => {
+        const name = sel.value;
+        if (!name) return;
+        if (!confirm(`Delete template "${name}"?`)) return;
+        deleteTemplate(name);
+      });
+    }
   }
 
   // ── Step 2: Release management ────────────────────────────────────────────
@@ -943,6 +973,7 @@
           </select>
           <button type="button" class="btn-tmpl" id="template-load-${id}">Load</button>
           <button type="button" class="btn-tmpl btn-tmpl-save" id="template-save-${id}">Save as…</button>
+          <button type="button" class="btn-tmpl btn-tmpl-del" id="template-del-${id}">Delete</button>
         </div>
         <div class="field">
           <label>Subject Line</label>
@@ -1227,11 +1258,11 @@
     document.getElementById('send-btn').textContent   = busy ? 'Sending…' : 'Send All Emails';
   }
 
-  async function sendOne(gmail_user, item) {
+  async function sendOne(gmail_user, from_name, item) {
     const res = await fetch('/send', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ gmail_user, emails: [item] }),
+      body:    JSON.stringify({ gmail_user, from_name, emails: [item] }),
     });
     return res.json();
   }
@@ -1247,6 +1278,57 @@
   }
 
   // ── Send ──────────────────────────────────────────────────────────────────
+  async function runSendLoop(items) {
+    const gmail_user = document.getElementById('gmail-user').value.trim();
+    const from_name  = document.getElementById('from-name').value.trim();
+    const total  = items.length;
+    const bar    = document.getElementById('progress-bar');
+    const status = document.getElementById('send-status');
+
+    let sentN = 0, failedN = 0;
+    const failedItems = [];
+
+    for (let i = 0; i < total; i++) {
+      const item = items[i];
+      status.textContent = `Sending ${i + 1} of ${total}…`;
+      bar.style.width = `${Math.round((i / total) * 100)}%`;
+
+      let ok = false, detail = '';
+      try {
+        const data = await sendOne(gmail_user, from_name, item);
+        if (data.sent?.length) {
+          ok = true;
+        } else {
+          detail = data.failed?.[0]?.error || data.error || 'Unknown error';
+          failedItems.push(item);
+        }
+        if (data.aborted) {
+          appendResultRow(item.email, false, detail);
+          failedN++;
+          for (let j = i + 1; j < total; j++) {
+            appendResultRow(items[j].email, false, 'Aborted');
+            failedN++;
+            failedItems.push(items[j]);
+          }
+          showError('step3-error', `Send aborted: ${data.abortReason}. Re-authorize Gmail and try again.`);
+          return { sentN, failedN, aborted: true, failedItems };
+        }
+      } catch (e) {
+        detail = e.message;
+        failedItems.push(item);
+      }
+
+      ok ? sentN++ : failedN++;
+      appendResultRow(item.email, ok, detail);
+      document.getElementById('result-sent-count').textContent = sentN   ? `✓ ${sentN} sent`    : '';
+      document.getElementById('result-fail-count').textContent = failedN ? `✗ ${failedN} failed` : '';
+
+      if (i < total - 1) await new Promise(r => setTimeout(r, 150));
+    }
+
+    return { sentN, failedN, aborted: false, failedItems };
+  }
+
   document.getElementById('send-btn').addEventListener('click', async () => {
     const gmail_user = document.getElementById('gmail-user').value.trim();
     clearError('step3-error');
@@ -1258,60 +1340,64 @@
     if (!confirm(`Send ${allEmailsToSend.length} email(s)? This cannot be undone.`)) return;
 
     setSendUIBusy(true);
-
-    const total  = allEmailsToSend.length;
-    const bar    = document.getElementById('progress-bar');
-    const status = document.getElementById('send-status');
-    const rList  = document.getElementById('result-list');
-
     document.getElementById('send-progress').style.display = 'block';
     document.getElementById('send-results').style.display  = 'block';
     document.getElementById('result-sent-count').textContent = '';
     document.getElementById('result-fail-count').textContent = '';
-    rList.innerHTML = '';
-    bar.style.width = '0%';
+    document.getElementById('result-list').innerHTML = '';
+    document.getElementById('progress-bar').style.width = '0%';
+    document.getElementById('retry-wrap').style.display = 'none';
 
-    let sentN = 0, failedN = 0;
+    const { sentN, failedN, aborted, failedItems } = await runSendLoop(allEmailsToSend);
 
-    for (let i = 0; i < total; i++) {
-      const item = allEmailsToSend[i];
-      status.textContent = `Sending ${i + 1} of ${total}…`;
-      bar.style.width = `${Math.round((i / total) * 100)}%`;
+    document.getElementById('progress-bar').style.width = '100%';
+    document.getElementById('send-status').textContent = aborted
+      ? `Aborted — ${sentN} sent, ${failedN} failed`
+      : `Done — ${sentN} sent, ${failedN} failed`;
 
-      let ok = false, detail = '';
-      try {
-        const data = await sendOne(gmail_user, item);
-        if (data.sent?.length) {
-          ok = true;
-        } else {
-          detail = data.failed?.[0]?.error || data.error || 'Unknown error';
-        }
-        if (data.aborted) {
-          appendResultRow(item.email, false, detail);
-          failedN++;
-          // Mark all remaining as aborted without more requests
-          for (let j = i + 1; j < total; j++) {
-            appendResultRow(allEmailsToSend[j].email, false, 'Aborted');
-            failedN++;
-          }
-          showError('step3-error', `Send aborted: ${data.abortReason}. Re-authorize Gmail and try again.`);
-          break;
-        }
-      } catch (e) {
-        detail = e.message;
-      }
-
-      ok ? sentN++ : failedN++;
-      appendResultRow(item.email, ok, detail);
-      document.getElementById('result-sent-count').textContent  = sentN   ? `✓ ${sentN} sent`     : '';
-      document.getElementById('result-fail-count').textContent  = failedN ? `✗ ${failedN} failed`  : '';
-
-      // Small pause between sends to stay well under Gmail's rate limits
-      if (i < total - 1) await new Promise(r => setTimeout(r, 150));
+    if (failedN > 0 && !aborted) {
+      const retryBtn = document.getElementById('retry-btn');
+      retryBtn.textContent  = `Retry ${failedN} failed`;
+      retryBtn._failedItems = failedItems;
+      document.getElementById('retry-wrap').style.display = 'block';
     }
 
-    bar.style.width = '100%';
-    status.textContent = `Done — ${sentN} sent, ${failedN} failed`;
+    setSendUIBusy(false);
+  });
+
+  document.getElementById('retry-btn').addEventListener('click', async () => {
+    const gmail_user = document.getElementById('gmail-user').value.trim();
+    clearError('step3-error');
+
+    const retryBtn    = document.getElementById('retry-btn');
+    const failedItems = retryBtn._failedItems || [];
+    if (!failedItems.length) return;
+
+    if (!gmail_user)
+      return showError('step3-error', 'Enter your Gmail address before sending.');
+    if (!(await checkAuthStatus()))
+      return showError('step3-error', 'Authorize with Google before sending.');
+
+    setSendUIBusy(true);
+    document.getElementById('retry-wrap').style.display = 'none';
+    document.getElementById('result-list').innerHTML = '';
+    document.getElementById('result-sent-count').textContent = '';
+    document.getElementById('result-fail-count').textContent = '';
+    document.getElementById('progress-bar').style.width = '0%';
+
+    const { sentN, failedN, aborted, failedItems: newFailed } = await runSendLoop(failedItems);
+
+    document.getElementById('progress-bar').style.width = '100%';
+    document.getElementById('send-status').textContent = aborted
+      ? `Aborted — ${sentN} sent, ${failedN} failed`
+      : `Done — ${sentN} sent, ${failedN} failed`;
+
+    if (failedN > 0 && !aborted) {
+      retryBtn.textContent  = `Retry ${failedN} failed`;
+      retryBtn._failedItems = newFailed;
+      document.getElementById('retry-wrap').style.display = 'block';
+    }
+
     setSendUIBusy(false);
   });
 
@@ -1332,9 +1418,10 @@
 
     // Send the first email in the batch to your own address so you see
     // exactly what a recipient will receive, with real name/code substituted.
+    const from_name = document.getElementById('from-name').value.trim();
     const sample = { ...allEmailsToSend[0], email: gmail_user };
     try {
-      const data = await sendOne(gmail_user, sample);
+      const data = await sendOne(gmail_user, from_name, sample);
       if (data.sent?.length) {
         btn.textContent = '✓ Test sent';
         setTimeout(() => { btn.disabled = false; btn.textContent = 'Send test to me'; }, 3000);
@@ -1391,6 +1478,22 @@
       '</ul>';
     el.style.display = 'block';
   }
+
+  function exportCsv() {
+    if (!allEmailsToSend.length) return;
+    const header = ['Release', 'Name', 'Email', 'Code', 'Subject'];
+    const rows = allEmailsToSend.map(e => [e.release, e.name, e.email, e.code, e.subject]);
+    const csv = [header, ...rows]
+      .map(row => row.map(cell => `"${String(cell ?? '').replace(/"/g, '""')}"`).join(','))
+      .join('\r\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = 'promo-preview.csv'; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  document.getElementById('export-csv-btn').addEventListener('click', exportCsv);
 
   function esc(str) {
     return String(str)

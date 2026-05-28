@@ -3,7 +3,9 @@ const multer  = require('multer');
 const XLSX    = require('xlsx');
 const path    = require('path');
 const fs      = require('fs');
-const session = require('express-session');
+const crypto  = require('crypto');
+const session        = require('express-session');
+const FirestoreStore = require('./firestoreSessionStore')(session);
 
 const app = express();
 app.set('trust proxy', 1); // Required for secure cookies behind Cloud Run
@@ -29,9 +31,22 @@ app.use((req, res, next) => {
   next();
 });
 
-const { escHtml, sanitizeMimeHeader, htmlToPlainText, applyTemplate, parseDjList } = require('./utils');
+const { escHtml, sanitizeMimeHeader, htmlToPlainText, applyTemplate, parseRecipientList, validateColumns } = require('./utils');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+
+// ── Fetch with timeout ─────────────────────────────────────────────────────
+/**
+ * Wrapper around fetch() that aborts after `ms` milliseconds.
+ * Prevents Google API calls from hanging indefinitely and exhausting
+ * Cloud Run connections.
+ */
+function fetchWithTimeout(url, options = {}, ms = 10000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  return fetch(url, { ...options, signal: controller.signal })
+    .finally(() => clearTimeout(timer));
+}
 
 // ── Config ─────────────────────────────────────────────────────────────────
 const PORT           = process.env.PORT           || 5001;
@@ -39,6 +54,13 @@ const BASE_URL       = process.env.BASE_URL        || `http://localhost:${PORT}`
 const BUCKET_NAME    = process.env.BUCKET_NAME;
 const ALLOWED_DOMAIN = process.env.ALLOWED_DOMAIN  || 'midnightecstasy.com';
 const SESSION_SECRET = process.env.SESSION_SECRET  || 'local-dev-secret-change-in-prod';
+
+// Pre-escape ALLOWED_DOMAIN for safe use in a RegExp — prevents regex injection
+// if the domain ever contains special characters (e.g. dots that should be literal).
+const ALLOWED_DOMAIN_RE = new RegExp(
+  '@' + ALLOWED_DOMAIN.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$',
+  'i',
+);
 
 if (BASE_URL.startsWith('https') && SESSION_SECRET === 'local-dev-secret-change-in-prod') {
   console.error('FATAL: SESSION_SECRET env var is not set. Refusing to start in production.');
@@ -158,22 +180,38 @@ app.get('/auth/login/google', (req, res) => {
   const clientId = getClientId();
   if (!clientId) return res.send(LOGIN_PAGE('OAuth not configured. Set GOOGLE_CLIENT_ID env var.'));
 
+  // Generate a random state token and store it in the session.
+  // Google will echo it back in the callback; we verify it matches to prevent
+  // CSRF attacks where a third-party tricks the browser into completing a
+  // login flow initiated by someone else.
+  const state = crypto.randomBytes(32).toString('hex');
+  req.session.oauthState = state;
+
   const params = new URLSearchParams({
     client_id:     clientId,
     redirect_uri:  `${BASE_URL}/auth/login/callback`,
     response_type: 'code',
     scope:         'openid email profile',
     access_type:   'online',
+    state,
   });
   res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params}`);
 });
 
 app.get('/auth/login/callback', async (req, res) => {
-  const { code, error } = req.query;
+  const { code, error, state } = req.query;
   if (error) return res.redirect(`/auth/login?error=${encodeURIComponent(error)}`);
 
+  // Validate the state parameter to prevent CSRF.
+  // A missing or mismatched state means this request wasn't initiated by us.
+  const expectedState = req.session.oauthState;
+  delete req.session.oauthState; // consume immediately — one-time use
+  if (!state || !expectedState || state !== expectedState) {
+    return res.redirect(`/auth/login?error=${encodeURIComponent('Invalid login session. Please try again.')}`);
+  }
+
   try {
-    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+    const tokenRes = await fetchWithTimeout('https://oauth2.googleapis.com/token', {
       method:  'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
@@ -187,19 +225,20 @@ app.get('/auth/login/callback', async (req, res) => {
     const tokens = await tokenRes.json();
     if (tokens.error) throw new Error(tokens.error_description || tokens.error);
 
-    const userRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+    const userRes = await fetchWithTimeout('https://www.googleapis.com/oauth2/v3/userinfo', {
       headers: { 'Authorization': `Bearer ${tokens.access_token}` },
     });
     const user = await userRes.json();
 
-    if (!user.email?.endsWith(`@${ALLOWED_DOMAIN}`)) {
+    if (!user.email || !ALLOWED_DOMAIN_RE.test(user.email)) {
       return res.redirect(`/auth/login?error=${encodeURIComponent(`Access restricted to @${ALLOWED_DOMAIN} accounts.`)}`);
     }
 
     req.session.user = { email: user.email, name: user.name };
     res.redirect('/');
   } catch (e) {
-    res.redirect(`/auth/login?error=${encodeURIComponent(e.message)}`);
+    const msg = e.name === 'AbortError' ? 'Google sign-in timed out. Please try again.' : e.message;
+    res.redirect(`/auth/login?error=${encodeURIComponent(msg)}`);
   }
 });
 
@@ -248,7 +287,7 @@ app.get('/auth/callback', async (req, res) => {
   }
 
   try {
-    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+    const tokenRes = await fetchWithTimeout('https://oauth2.googleapis.com/token', {
       method:  'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
@@ -295,7 +334,7 @@ async function getAccessToken() {
   if (!oauthConfig.tokens) throw new Error('Not authorized with Gmail');
   if (Date.now() < oauthConfig.tokens.expiry) return oauthConfig.tokens.access_token;
 
-  const res = await fetch('https://oauth2.googleapis.com/token', {
+  const res = await fetchWithTimeout('https://oauth2.googleapis.com/token', {
     method:  'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
@@ -346,7 +385,7 @@ async function sendGmail(accessToken, from, to, subject, htmlBody) {
 
   const raw = Buffer.from(mime).toString('base64url');
 
-  const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+  const res = await fetchWithTimeout('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
     method:  'POST',
     headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
     body:    JSON.stringify({ raw }),
@@ -407,9 +446,16 @@ app.post('/preview', previewUpload, (req, res) => {
 
     const warnings = [];
 
-    // Parse DJ list and warn if rows were silently dropped
-    const rawDjRows = readSpreadsheet(djFileInfo.buffer);
-    const djList    = parseDjList(rawDjRows, name_col, email_col);
+    // Parse recipient list and warn if rows were silently dropped
+    const rawRecipientRows = readSpreadsheet(recipientFileInfo.buffer);
+
+    // Validate that the chosen columns actually exist in the spreadsheet.
+    // Without this, a missing column silently produces empty strings for every
+    // recipient — wrong codes could be sent to every DJ in the list.
+    const recipientColErr = validateColumns(rawRecipientRows, [name_col, email_col]);
+    if (recipientColErr) return res.status(400).json({ error: `Recipient file: ${recipientColErr}` });
+
+    const recipientList = parseRecipientList(rawRecipientRows, name_col, email_col);
 
     if (!djList.length) return res.status(400).json({ error: 'No valid DJ rows found. Check that the correct name and email columns are selected, and that email addresses contain @.' });
 
@@ -438,6 +484,12 @@ app.post('/preview', previewUpload, (req, res) => {
       const name     = req.body[`release_name_${i}`] || `Release ${i + 1}`;
 
       const rawCodeRows = readSpreadsheet(codesFile.buffer);
+
+      // Validate the codes column exists before mapping — a wrong column name
+      // silently yields empty codes for every recipient.
+      const codesColErr = validateColumns(rawCodeRows, [codesCol], name);
+      if (codesColErr) return res.status(400).json({ error: codesColErr });
+
       const codes = rawCodeRows.map(r => String(r[codesCol] ?? '').trim()).filter(Boolean);
 
       // Warn if blank rows were dropped from the codes file (row-alignment risk)

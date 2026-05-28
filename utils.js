@@ -88,4 +88,30 @@ function parseDjList(rows, nameCol, emailCol) {
     .filter(r => r.name && r.email && r.email.includes('@'));
 }
 
-module.exports = { escHtml, sanitizeMimeHeader, htmlToPlainText, applyTemplate, parseDjList };
+/**
+ * Verify that every required column name exists in the rows returned by
+ * XLSX.utils.sheet_to_json. Returns null on success, or an error string
+ * describing the first missing column and the available alternatives.
+ *
+ * Exported so the same logic can be unit-tested without spinning up Express.
+ *
+ * @param {object[]} rows      - Parsed spreadsheet rows (must have ≥ 1 element)
+ * @param {string[]} required  - Column names that must be present
+ * @param {string}   [context] - Optional label shown in the error (e.g. a release name)
+ * @returns {string|null}
+ */
+function validateColumns(rows, required, context) {
+  if (!rows || rows.length === 0) return null; // nothing to validate against
+  const available = Object.keys(rows[0]);
+  for (const col of required) {
+    if (!available.includes(col)) {
+      const prefix = context ? `"${context}": ` : '';
+      return `${prefix}column "${col}" not found. Available columns: ${available.join(', ')}`;
+    }
+  }
+  return null;
+}
+
+const parseRecipientList = parseDjList;
+
+module.exports = { escHtml, sanitizeMimeHeader, htmlToPlainText, applyTemplate, parseRecipientList, validateColumns };

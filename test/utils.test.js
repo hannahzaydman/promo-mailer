@@ -2,7 +2,9 @@
 
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
-const { escHtml, sanitizeMimeHeader, htmlToPlainText, applyTemplate, parseDjList } = require('../utils');
+const { escHtml, sanitizeMimeHeader, htmlToPlainText, applyTemplate, parseRecipientList } = require('../utils');
+// Alias — the function was renamed from parseDjList to parseRecipientList.
+const parseDjList = parseRecipientList;
 
 // ── escHtml ──────────────────────────────────────────────────────────────────
 

@@ -32,7 +32,7 @@ app.use((req, res, next) => {
   next();
 });
 
-const { escHtml, sanitizeMimeHeader, htmlToPlainText, applyTemplate, parseRecipientList, isFatalSmtpError, validateColumns } = require('./utils');
+const { escHtml, sanitizeMimeHeader, htmlToPlainText, applyTemplate, parseRecipientList, isFatalSmtpError, validateColumns, RateLimiter, validateInputLengths, redactCredentials } = require('./utils');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
@@ -53,9 +53,21 @@ if (BASE_URL.startsWith('https') && SESSION_SECRET === 'local-dev-secret-change-
 const GOOGLE_CLIENT_ID     = process.env.GOOGLE_CLIENT_ID;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
 
+// ── Rate limiters ──────────────────────────────────────────────────────────
+// 5 send requests per session per minute.  Keyed on session ID so each
+// authenticated user has an independent quota.
+const sendRateLimiter = new RateLimiter(5, 60_000);
+// Prune stale entries every 5 minutes to prevent unbounded Map growth.
+setInterval(() => sendRateLimiter.prune(), 5 * 60_000).unref();
+
 // ── Session ────────────────────────────────────────────────────────────────
+const sessionStore = new FirestoreStore();
+// Log Firestore session store errors so they surface in Cloud Run logs
+// instead of silently failing (which would cause every request to appear
+// unauthenticated and flood the login page with confusing redirects).
+sessionStore.on('error', err => console.error('[session store error]', err));
 app.use(session({
-  store:             new FirestoreStore(),
+  store:             sessionStore,
   secret:            SESSION_SECRET,
   resave:            false,
   saveUninitialized: false,
@@ -67,7 +79,9 @@ app.use(session({
   },
 }));
 
-app.use(express.json());
+// Raise the JSON body limit to 5 MB so that large send batches (many
+// recipients × HTML body) are not silently rejected with a 413.
+app.use(express.json({ limit: '5mb' }));
 
 // ── Google login middleware ────────────────────────────────────────────────
 function requireAuth(req, res, next) {
@@ -429,6 +443,13 @@ app.post('/preview', previewUpload, (req, res) => {
       const body     = req.body[`body_${i}`] || '';
       const name     = req.body[`release_name_${i}`] || `Release ${i + 1}`;
 
+      const previewLenErr = validateInputLengths({
+        [`release_name_${i}`]: { value: name,    max: 200      },
+        [`subject_${i}`]:      { value: subject, max: 998      },
+        [`body_${i}`]:         { value: body,    max: 512*1024 },
+      });
+      if (previewLenErr) return res.status(400).json({ error: previewLenErr });
+
       const rawCodeRows = readSpreadsheet(codesFile.buffer);
 
       const codesColErr = validateColumns(rawCodeRows, [codesCol], name);
@@ -474,9 +495,26 @@ app.post('/preview', previewUpload, (req, res) => {
 
 // ── Send ───────────────────────────────────────────────────────────────────
 app.post('/send', async (req, res) => {
+  // Rate limit: 5 sends per minute per session to prevent accidental or
+  // malicious spam bursts.
+  const rlKey = req.session?.id || req.ip;
+  if (!sendRateLimiter.isAllowed(rlKey)) {
+    return res.status(429).json({ error: 'Too many requests. Please wait a moment before sending again.' });
+  }
+
   const { smtp_host, smtp_port, smtp_user, smtp_pass, from_name, emails } = req.body;
   if (!smtp_user)      return res.status(400).json({ error: 'Email address is required' });
   if (!emails?.length) return res.status(400).json({ error: 'No emails to send' });
+
+  // Input length validation — prevents oversized strings from reaching the
+  // SMTP transport or appearing in logs.
+  const lenErr = validateInputLengths({
+    'from_name': { value: from_name, max: 200 },
+    'smtp_host': { value: smtp_host, max: 253 },
+    'smtp_user': { value: smtp_user, max: 254 },
+    'smtp_pass': { value: smtp_pass, max: 256 },
+  });
+  if (lenErr) return res.status(400).json({ error: lenErr });
 
   const fromAddr = from_name?.trim()
     ? `"${from_name.trim().replace(/"/g, "'")}" <${smtp_user}>`
@@ -493,7 +531,7 @@ app.post('/send', async (req, res) => {
         await sendViaGmail(token, fromAddr, sanitizeMimeHeader(item.email), sanitizeMimeHeader(item.subject), item.body);
         sent.push(item.email);
       } catch (e) {
-        failed.push({ email: item.email, error: e.message });
+        failed.push({ email: item.email, error: redactCredentials(e.message, GOOGLE_CLIENT_SECRET) });
         if (isFatalGmailError(e.message)) {
           for (let j = i + 1; j < emails.length; j++)
             failed.push({ email: emails[j].email, error: 'Aborted — see previous error' });
@@ -529,7 +567,7 @@ app.post('/send', async (req, res) => {
       });
       sent.push(item.email);
     } catch (e) {
-      failed.push({ email: item.email, error: e.message });
+      failed.push({ email: item.email, error: redactCredentials(e.message, smtp_pass) });
       if (isFatalSmtpError(e.message)) {
         for (let j = i + 1; j < emails.length; j++)
           failed.push({ email: emails[j].email, error: 'Aborted — see previous error' });

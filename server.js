@@ -30,7 +30,7 @@ app.use((req, res, next) => {
   next();
 });
 
-const { escHtml, sanitizeMimeHeader, htmlToPlainText, applyTemplate, parseRecipientList, validateColumns, RateLimiter, validateInputLengths, redactCredentials } = require('./utils');
+const { escHtml, sanitizeMimeHeader, htmlToPlainText, applyTemplate, parseRecipientList, partitionCodes, isFatalSmtpError, validateColumns, RateLimiter, validateInputLengths, redactCredentials } = require('./utils');
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
@@ -56,9 +56,9 @@ const GOOGLE_CLIENT_ID     = process.env.GOOGLE_CLIENT_ID;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
 
 // ── Rate limiters ──────────────────────────────────────────────────────────
-// 5 send requests per session per minute.  Keyed on session ID so each
+// 200 send requests per session per minute.  Keyed on session ID so each
 // authenticated user has an independent quota.
-const sendRateLimiter = new RateLimiter(5, 60_000);
+const sendRateLimiter = new RateLimiter(200, 60_000);
 // Prune stale entries every 5 minutes to prevent unbounded Map growth.
 setInterval(() => sendRateLimiter.prune(), 5 * 60_000).unref();
 
@@ -379,21 +379,22 @@ app.post('/preview', previewUpload, (req, res) => {
     }
 
     const warnings = [];
-
     let recipientList = [];
 
     if (recipientFileInfo) {
       // Parse recipient list and warn if rows were silently dropped
       const rawRecipientRows = readSpreadsheet(recipientFileInfo.buffer);
 
+      const resolvedNameCol = name_col && name_col !== '__none__' ? name_col : null;
+
       const recipientColErr = validateColumns(rawRecipientRows, [email_col]);
       if (recipientColErr) return res.status(400).json({ error: 'Recipient file: ' + recipientColErr });
-      if (name_col && name_col !== '__none__') {
-        const nameColErr = validateColumns(rawRecipientRows, [name_col]);
+      if (resolvedNameCol) {
+        const nameColErr = validateColumns(rawRecipientRows, [resolvedNameCol]);
         if (nameColErr) return res.status(400).json({ error: 'Recipient file: ' + nameColErr });
       }
 
-      const fromFile = parseRecipientList(rawRecipientRows, name_col && name_col !== '__none__' ? name_col : null, email_col);
+      const fromFile = parseRecipientList(rawRecipientRows, resolvedNameCol, email_col);
 
       const dropped = rawRecipientRows.length - fromFile.length;
       if (dropped > 0) {
@@ -406,8 +407,7 @@ app.post('/preview', previewUpload, (req, res) => {
     // Append manually entered recipients
     recipientList = recipientList.concat(extraRecipients);
 
-    if (!recipientList.length) return res.status(400).json({ error: 'No valid recipients found. Check that the correct name and email columns are selected, and that email addresses contain @.' });
-
+    if (!recipientList.length) return res.status(400).json({ error: 'No valid recipients found. Check that the correct email column is selected and that email addresses contain @.' });
     // Warn about duplicate email addresses in the recipient list
     const emailCount = {};
     recipientList.forEach(recipient => { emailCount[recipient.email] = (emailCount[recipient.email] || 0) + 1; });
@@ -453,14 +453,14 @@ app.post('/preview', previewUpload, (req, res) => {
         });
       }
 
-      const unusedCodes = codes.slice(recipientList.length);
+      const { assigned: assignedCodes, unused: unusedCodes } = partitionCodes(codes, recipientList.length);
 
       releases.push({
         name,
         count: recipientList.length,
         unusedCodes,
         emails: recipientList.map((recipient, j) => {
-          const code = codes[j];
+          const code = assignedCodes[j];
           return {
             name:    recipient.name,
             email:   recipient.email,
@@ -474,9 +474,7 @@ app.post('/preview', previewUpload, (req, res) => {
     }
 
     const allEmails = releases.flatMap(r => r.emails);
-    const unusedCodesByRelease = Object.fromEntries(
-      releases.map(r => [r.name, r.unusedCodes])
-    );
+    const unusedCodesByRelease = Object.fromEntries(releases.map(r => [r.name, r.unusedCodes]));
     res.json({ releases, allEmails, total: allEmails.length, warnings, unusedCodesByRelease });
   } catch (e) {
     res.status(400).json({ error: e.message });

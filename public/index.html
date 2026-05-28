@@ -460,6 +460,41 @@
     .auth-status.authorized { color: var(--success); }
     .auth-status.unauthorized { color: var(--muted); }
 
+    /* ── Template bar ────────────────────────────────────────────────────────── */
+    .template-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 18px;
+      padding-bottom: 18px;
+      border-bottom: 1px solid var(--border-soft);
+    }
+    .template-bar select {
+      flex: 1;
+      min-width: 0;
+      font-size: 0.8rem;
+      padding: 7px 10px;
+      color: var(--text-secondary);
+    }
+    .btn-tmpl {
+      background: transparent;
+      color: var(--text-secondary);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 7px 12px;
+      font-size: 0.72rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: color 0.15s, border-color 0.15s, background 0.15s;
+      font-family: inherit;
+      font-weight: 500;
+    }
+    .btn-tmpl:hover { color: var(--text); border-color: #3a3a3a; background: var(--surface2); }
+    .btn-tmpl-save { color: var(--accent); border-color: rgba(224,53,53,0.3); }
+    .btn-tmpl-save:hover { background: rgba(224,53,53,0.04); border-color: var(--accent); color: var(--accent); }
+
     /* ── Rich text editor ────────────────────────────────────────────────────── */
     .rich-editor {
       border: 1px solid var(--border);
@@ -695,6 +730,7 @@
     </div>
 
     <div class="actions">
+      <button class="btn btn-secondary" id="test-send-btn">Send test to me</button>
       <button class="btn" id="send-btn">Send All Emails</button>
     </div>
   </div>
@@ -802,6 +838,72 @@
     });
   });
 
+  // ── Template library (localStorage) ──────────────────────────────────────
+  const TMPL_KEY = 'promo-mailer-templates';
+
+  function getTemplates() {
+    try { return JSON.parse(localStorage.getItem(TMPL_KEY) || '{}'); } catch { return {}; }
+  }
+
+  function persistTemplates(t) {
+    try { localStorage.setItem(TMPL_KEY, JSON.stringify(t)); } catch { /* storage full */ }
+  }
+
+  function saveTemplate(name, subject, body) {
+    const t = getTemplates();
+    t[name] = { subject, body };
+    persistTemplates(t);
+    refreshAllTemplateSelects();
+  }
+
+  function refreshAllTemplateSelects() {
+    document.querySelectorAll('.template-select').forEach(sel => {
+      const current = sel.value;
+      populateTemplateSelect(sel);
+      // Restore selection if the template still exists
+      if (getTemplates()[current]) sel.value = current;
+    });
+  }
+
+  function populateTemplateSelect(sel) {
+    const names = Object.keys(getTemplates());
+    sel.innerHTML = `<option value="">— Load template —</option>` +
+      names.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
+  }
+
+  function initTemplateBar(id) {
+    const sel     = document.getElementById(`template-select-${id}`);
+    const loadBtn = document.getElementById(`template-load-${id}`);
+    const saveBtn = document.getElementById(`template-save-${id}`);
+    if (!sel || !loadBtn || !saveBtn) return;
+
+    populateTemplateSelect(sel);
+
+    loadBtn.addEventListener('click', () => {
+      const name = sel.value;
+      if (!name) return;
+      const t = getTemplates()[name];
+      if (!t) return;
+      const subjectEl = document.getElementById(`subject-${id}`);
+      const bodyEl    = document.getElementById(`body-${id}`);
+      if (subjectEl) subjectEl.value = t.subject;
+      if (bodyEl)    bodyEl.innerHTML = t.body;
+    });
+
+    saveBtn.addEventListener('click', () => {
+      const releaseName  = document.getElementById(`release-name-${id}`)?.value.trim();
+      const existingName = sel.value;
+      const defaultName  = existingName || releaseName || `Template ${Object.keys(getTemplates()).length + 1}`;
+      const name = prompt('Save template as:', defaultName);
+      if (!name?.trim()) return;
+      const subject = document.getElementById(`subject-${id}`)?.value || '';
+      const body    = document.getElementById(`body-${id}`)?.innerHTML || '';
+      saveTemplate(name.trim(), subject, body);
+      // Select the just-saved template
+      sel.value = name.trim();
+    });
+  }
+
   // ── Step 2: Release management ────────────────────────────────────────────
   function createRelease() {
     const id = releaseIdCounter++;
@@ -834,6 +936,13 @@
         <div class="field hidden" id="codes-col-wrap-${id}">
           <label>Code Column</label>
           <select id="codes-col-${id}"></select>
+        </div>
+        <div class="template-bar">
+          <select class="template-select" id="template-select-${id}">
+            <option value="">— Load template —</option>
+          </select>
+          <button type="button" class="btn-tmpl" id="template-load-${id}">Load</button>
+          <button type="button" class="btn-tmpl btn-tmpl-save" id="template-save-${id}">Save as…</button>
         </div>
         <div class="field">
           <label>Subject Line</label>
@@ -870,6 +979,7 @@
     container.appendChild(wrap);
     syncRemoveButtons();
     initEditor(id);
+    initTemplateBar(id);
   }
 
   function removeRelease(id) {
@@ -1110,6 +1220,32 @@
     if (n === 3) checkAuthStatus();
   };
 
+  // ── Send helpers ──────────────────────────────────────────────────────────
+  function setSendUIBusy(busy) {
+    document.getElementById('send-btn').disabled      = busy;
+    document.getElementById('test-send-btn').disabled = busy;
+    document.getElementById('send-btn').textContent   = busy ? 'Sending…' : 'Send All Emails';
+  }
+
+  async function sendOne(gmail_user, item) {
+    const res = await fetch('/send', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ gmail_user, emails: [item] }),
+    });
+    return res.json();
+  }
+
+  function appendResultRow(email, ok, detail) {
+    const rList = document.getElementById('result-list');
+    rList.innerHTML +=
+      `<div class="result-row">` +
+      `<span class="dot ${ok ? 'dot-success' : 'dot-fail'}"></span>` +
+      `${esc(email)}${detail ? ` — ${esc(detail)}` : ''}` +
+      `</div>`;
+    rList.scrollTop = rList.scrollHeight;
+  }
+
   // ── Send ──────────────────────────────────────────────────────────────────
   document.getElementById('send-btn').addEventListener('click', async () => {
     const gmail_user = document.getElementById('gmail-user').value.trim();
@@ -1121,52 +1257,95 @@
       return showError('step3-error', 'Authorize with Google before sending.');
     if (!confirm(`Send ${allEmailsToSend.length} email(s)? This cannot be undone.`)) return;
 
-    const sendBtn = document.getElementById('send-btn');
-    sendBtn.disabled = true; sendBtn.textContent = 'Sending…';
+    setSendUIBusy(true);
+
+    const total  = allEmailsToSend.length;
+    const bar    = document.getElementById('progress-bar');
+    const status = document.getElementById('send-status');
+    const rList  = document.getElementById('result-list');
+
     document.getElementById('send-progress').style.display = 'block';
-    document.getElementById('send-results').style.display  = 'none';
-    document.getElementById('progress-bar').style.width = '20%';
-    document.getElementById('send-status').textContent = `Sending ${allEmailsToSend.length} emails…`;
+    document.getElementById('send-results').style.display  = 'block';
+    document.getElementById('result-sent-count').textContent = '';
+    document.getElementById('result-fail-count').textContent = '';
+    rList.innerHTML = '';
+    bar.style.width = '0%';
 
-    try {
-      const res = await fetch('/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ gmail_user, emails: allEmailsToSend }),
-      });
-      const data = await res.json();
-      document.getElementById('progress-bar').style.width = '100%';
+    let sentN = 0, failedN = 0;
 
-      if (data.error) {
-        showError('step3-error', data.error);
-        document.getElementById('send-progress').style.display = 'none';
-        sendBtn.disabled = false; sendBtn.textContent = 'Send All Emails';
-        return;
+    for (let i = 0; i < total; i++) {
+      const item = allEmailsToSend[i];
+      status.textContent = `Sending ${i + 1} of ${total}…`;
+      bar.style.width = `${Math.round((i / total) * 100)}%`;
+
+      let ok = false, detail = '';
+      try {
+        const data = await sendOne(gmail_user, item);
+        if (data.sent?.length) {
+          ok = true;
+        } else {
+          detail = data.failed?.[0]?.error || data.error || 'Unknown error';
+        }
+        if (data.aborted) {
+          appendResultRow(item.email, false, detail);
+          failedN++;
+          // Mark all remaining as aborted without more requests
+          for (let j = i + 1; j < total; j++) {
+            appendResultRow(allEmailsToSend[j].email, false, 'Aborted');
+            failedN++;
+          }
+          showError('step3-error', `Send aborted: ${data.abortReason}. Re-authorize Gmail and try again.`);
+          break;
+        }
+      } catch (e) {
+        detail = e.message;
       }
 
-      setTimeout(() => {
-        document.getElementById('send-progress').style.display = 'none';
-        document.getElementById('send-results').style.display  = 'block';
-        document.getElementById('result-sent-count').textContent = `✓ ${data.sent.length} sent`;
-        document.getElementById('result-fail-count').textContent =
-          data.failed.length ? `✗ ${data.failed.length} failed` : '';
-        if (data.aborted) {
-          showError('step3-error', `Send aborted: ${data.abortReason}. Re-authorize Gmail and try again.`);
-        }
+      ok ? sentN++ : failedN++;
+      appendResultRow(item.email, ok, detail);
+      document.getElementById('result-sent-count').textContent  = sentN   ? `✓ ${sentN} sent`     : '';
+      document.getElementById('result-fail-count').textContent  = failedN ? `✗ ${failedN} failed`  : '';
 
-        const rList = document.getElementById('result-list');
-        rList.innerHTML = '';
-        data.sent.forEach(email =>
-          rList.innerHTML += `<div class="result-row"><span class="dot dot-success"></span>${esc(email)}</div>`);
-        data.failed.forEach(f =>
-          rList.innerHTML += `<div class="result-row"><span class="dot dot-fail"></span>${esc(f.email)} — ${esc(f.error)}</div>`);
-        sendBtn.disabled = false; sendBtn.textContent = 'Send All Emails';
-      }, 400);
+      // Small pause between sends to stay well under Gmail's rate limits
+      if (i < total - 1) await new Promise(r => setTimeout(r, 150));
+    }
 
-    } catch(e) {
-      showError('step3-error', 'Request failed. Check your connection and try again.');
-      document.getElementById('send-progress').style.display = 'none';
-      sendBtn.disabled = false; sendBtn.textContent = 'Send All Emails';
+    bar.style.width = '100%';
+    status.textContent = `Done — ${sentN} sent, ${failedN} failed`;
+    setSendUIBusy(false);
+  });
+
+  // ── Test email ────────────────────────────────────────────────────────────
+  document.getElementById('test-send-btn').addEventListener('click', async () => {
+    const gmail_user = document.getElementById('gmail-user').value.trim();
+    clearError('step3-error');
+
+    if (!gmail_user)
+      return showError('step3-error', 'Enter your Gmail address first.');
+    if (!allEmailsToSend.length)
+      return showError('step3-error', 'Generate a preview first.');
+    if (!(await checkAuthStatus()))
+      return showError('step3-error', 'Authorize with Google before sending.');
+
+    const btn = document.getElementById('test-send-btn');
+    btn.disabled = true; btn.textContent = 'Sending…';
+
+    // Send the first email in the batch to your own address so you see
+    // exactly what a recipient will receive, with real name/code substituted.
+    const sample = { ...allEmailsToSend[0], email: gmail_user };
+    try {
+      const data = await sendOne(gmail_user, sample);
+      if (data.sent?.length) {
+        btn.textContent = '✓ Test sent';
+        setTimeout(() => { btn.disabled = false; btn.textContent = 'Send test to me'; }, 3000);
+      } else {
+        const msg = data.failed?.[0]?.error || data.error || 'Failed';
+        showError('step3-error', `Test email failed: ${msg}`);
+        btn.disabled = false; btn.textContent = 'Send test to me';
+      }
+    } catch (e) {
+      showError('step3-error', `Test email failed: ${e.message}`);
+      btn.disabled = false; btn.textContent = 'Send test to me';
     }
   });
 

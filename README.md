@@ -9,13 +9,22 @@ A web app for sending personalized promo emails to DJ lists with Bandcamp downlo
 1. Upload a DJ list (`.xlsx` or `.csv`) with names and email addresses
 2. Add one or more releases, each with its own download codes (`.csv`) and email template
 3. Preview every personalized email before anything is sent
-4. Authorize with Gmail via OAuth and send everything in one click
+4. Authorize with Gmail via OAuth and send in real-time with live progress
 
 Email templates support two placeholders:
 - `{name}` — replaced with the DJ's name
 - `{code}` — replaced with their unique download code
 
 Codes are assigned one-to-one in spreadsheet order (row 1 DJ → row 1 code, etc).
+
+### Features
+- **Template library** — save and load email templates locally (localStorage, no server needed)
+- **Test email** — send the first email in the batch to yourself before the full send
+- **Real-time progress** — live per-email progress bar and result list as sends complete
+- **Retry failed** — after a batch, retry only the emails that errored without re-running the flow
+- **Export CSV** — download a spreadsheet of all previewed emails (release, name, email, code, subject) for verification
+- **Custom From name** — set a display name so emails arrive as `Label Name <you@domain.com>`
+- **Warnings** — flags duplicate emails, skipped DJ rows, and misaligned codes files before sending
 
 ---
 
@@ -33,6 +42,7 @@ Codes are assigned one-to-one in spreadsheet order (row 1 DJ → row 1 code, etc
 | Token storage | Local `config.json` (dev) / Google Cloud Storage (production) |
 | Hosting | Google Cloud Run |
 | Tests | Node.js built-in `node:test` (no extra dependencies) |
+| Template storage | `localStorage` (client-side, no database) |
 
 ---
 
@@ -54,6 +64,8 @@ promo-mailer/
 ├── package.json
 └── config.json         # Auto-generated locally — stores Gmail tokens only (never commit this)
 ```
+
+Templates are saved in browser `localStorage` under the key `promo-mailer-templates` and persist across sessions with no server involvement.
 
 ---
 
@@ -252,6 +264,15 @@ Make sure `https://promo-mailer-wgqszg7kfq-uc.a.run.app/auth/login/callback` is 
 
 **"Not enough codes" error**
 The codes CSV has fewer rows than the DJ list. Add more codes or reduce the DJ list.
+
+**`gcloud run deploy` crashes with a `FileNotFoundError` on a macOS News path**
+gcloud is scanning the wrong directory. Run the deploy from inside the project folder, or pass the path explicitly:
+```bash
+cd ~/promo-mailer && gcloud run deploy promo-mailer --source . --region us-central1
+# or
+gcloud run deploy promo-mailer --source ~/promo-mailer --region us-central1
+```
+If it persists, run `gcloud components update` first.
 
 **"MulterError: Unexpected field"**
 Server wasn't restarted after a code change. Stop and restart `node server.js`.

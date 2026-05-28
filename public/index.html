@@ -645,6 +645,8 @@
       <a href="https://soundcloud.com/midnight-ecstasy" target="_blank" rel="noopener noreferrer">SoundCloud</a>
       <div class="header-sep"></div>
       <a href="https://www.instagram.com/midnight__ecstasy/" target="_blank" rel="noopener noreferrer">Instagram</a>
+      <div class="header-sep"></div>
+      <a href="/auth/logout" id="logout-link">Sign out</a>
     </div>
   </div>
   <img src="https://f4.bcbits.com/img/0042095815_10.jpg" class="label-logo" alt="Midnight Ecstasy" />
@@ -735,32 +737,7 @@
 <!-- STEP 3 -->
 <div id="step3">
   <div class="card">
-    <h2>Gmail Authorization</h2>
-
-    <details class="setup-details">
-      <summary>Setup instructions (one-time)</summary>
-      <ol class="setup-steps">
-        <li>Go to <strong>console.cloud.google.com</strong> and create a new project (or select an existing one).</li>
-        <li>Search for <strong>Gmail API</strong> and enable it.</li>
-        <li>Go to <strong>APIs &amp; Services &rarr; OAuth consent screen</strong>.<br>
-            Set User Type to <strong>Internal</strong> (Google Workspace — no verification required).</li>
-        <li>Go to <strong>Credentials &rarr; Create Credentials &rarr; OAuth client ID</strong>.<br>
-            Application type: <strong>Web application</strong>.<br>
-            Under <em>Authorized redirect URIs</em>, add: <code>http://localhost:5001/auth/callback</code></li>
-        <li>Copy your <strong>Client ID</strong> and <strong>Client Secret</strong> into the fields below.</li>
-      </ol>
-    </details>
-
-    <div class="col-row" style="margin-top:18px">
-      <div class="field">
-        <label>Client ID</label>
-        <input type="text" id="client-id" placeholder="xxxx.apps.googleusercontent.com" />
-      </div>
-      <div class="field">
-        <label>Client Secret</label>
-        <input type="password" id="client-secret" placeholder="GOCSPX-..." />
-      </div>
-    </div>
+    <h2>Sender Settings</h2>
 
     <div class="col-row">
       <div class="field">
@@ -768,14 +745,43 @@
         <input type="text" id="from-name" placeholder="e.g. Midnight Ecstasy" />
       </div>
       <div class="field">
-        <label>Your Gmail Address</label>
-        <input type="email" id="gmail-user" placeholder="you@yourworkspace.com" />
+        <label>Your Email Address</label>
+        <input type="email" id="smtp-user" placeholder="you@gmail.com" autocomplete="username" />
       </div>
     </div>
 
-    <div style="display:flex;align-items:center;gap:14px;margin-top:4px">
-      <button class="btn" id="auth-btn">Authorize with Google</button>
-      <span id="auth-status" class="auth-status"></span>
+    <!-- Gmail OAuth option — shown only when server has GOOGLE_CLIENT_ID configured -->
+    <div id="gmail-auth-wrap" style="display:none;margin-bottom:18px">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <button class="btn" id="gmail-auth-btn" type="button">Sign in with Google</button>
+        <span id="gmail-auth-status" style="font-size:0.8rem;color:var(--text-secondary)"></span>
+      </div>
+      <p class="hint" style="margin-top:8px">
+        Send directly via Gmail — no app password needed. Authorization is stored in your session only.
+      </p>
+    </div>
+
+    <!-- SMTP credentials — hidden when Gmail OAuth is active -->
+    <div id="smtp-creds-wrap">
+      <div class="col-row">
+        <div class="field">
+          <label>SMTP Host</label>
+          <input type="text" id="smtp-host" placeholder="smtp.gmail.com" />
+        </div>
+        <div class="field" style="max-width:160px">
+          <label>Port</label>
+          <input type="text" id="smtp-port" placeholder="587" />
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Password / App Password</label>
+        <input type="password" id="smtp-pass" placeholder="&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;" autocomplete="current-password" />
+        <p class="hint" style="margin-top:6px">
+          Gmail: create an <strong>App Password</strong> at myaccount.google.com/apppasswords (requires 2-Step Verification).
+          Outlook/365: use your regular password or an app password if your org requires it.
+        </p>
+      </div>
     </div>
   </div>
 
@@ -1246,93 +1252,97 @@
     btn.textContent = el.classList.contains('expanded') ? 'Show less' : 'Show more';
   }
 
-  // ── OAuth ─────────────────────────────────────────────────────────────────
-  async function checkAuthStatus() {
-    const res  = await fetch('/auth/status');
-    const data = await res.json();
-    const el   = document.getElementById('auth-status');
-    if (data.authorized) {
-      el.textContent = '✓ Authorized';
-      el.className   = 'auth-status authorized';
-    } else {
-      el.textContent = 'Not authorized';
-      el.className   = 'auth-status unauthorized';
-    }
-    return data.authorized;
+  // ── Gmail send OAuth ──────────────────────────────────────────────────────
+  let gmailAuthorized = false;
+
+  async function refreshGmailStatus() {
+    try {
+      const res  = await fetch('/auth/gmail/status');
+      const data = await res.json();
+      const wrap   = document.getElementById('gmail-auth-wrap');
+      const btn    = document.getElementById('gmail-auth-btn');
+      const status = document.getElementById('gmail-auth-status');
+      const creds  = document.getElementById('smtp-creds-wrap');
+      if (!data.hasOAuth) { wrap.style.display = 'none'; return; }
+      wrap.style.display = 'block';
+      gmailAuthorized = data.authorized;
+      if (data.authorized) {
+        btn.textContent     = 'Disconnect Gmail';
+        status.textContent  = '✓ Connected';
+        status.style.color  = 'var(--success)';
+        creds.style.display = 'none';
+      } else {
+        btn.textContent     = 'Sign in with Google';
+        status.textContent  = '';
+        creds.style.display = '';
+      }
+    } catch (e) { /* silently ignore */ }
   }
 
-  document.getElementById('auth-btn').addEventListener('click', async () => {
-    const clientId     = document.getElementById('client-id').value.trim();
-    const clientSecret = document.getElementById('client-secret').value.trim();
-    if (!clientId || !clientSecret)
-      return showError('step3-error', 'Enter your Client ID and Client Secret first.');
-
-    const res  = await fetch('/auth/setup', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ client_id: clientId, client_secret: clientSecret }),
-    });
-    const data = await res.json();
-    if (data.error) return showError('step3-error', data.error);
-
-    const popup = window.open(data.authUrl, 'gmail-auth', 'width=500,height=640');
-
-    window.addEventListener('message', async (e) => {
-      if (e.origin !== window.location.origin) return;
-      if (e.data === 'gmail-authorized') {
-        popup?.close();
-        await checkAuthStatus();
-      }
-    }, { once: true });
-
-    const poll = setInterval(async () => {
-      if (popup?.closed) {
-        clearInterval(poll);
-        await checkAuthStatus();
-      }
-    }, 1000);
+  document.getElementById('gmail-auth-btn').addEventListener('click', async () => {
+    if (gmailAuthorized) {
+      await fetch('/auth/gmail/revoke', { method: 'POST' });
+      await refreshGmailStatus();
+      return;
+    }
+    try {
+      const res  = await fetch('/auth/gmail/setup', { method: 'POST' });
+      const data = await res.json();
+      if (data.error) { showError('step3-error', data.error); return; }
+      const popup = window.open(data.authUrl, 'gmail-send-auth', 'width=500,height=640,noopener');
+      window.addEventListener('message', async (e) => {
+        if (e.data === 'gmail-authorized') { popup?.close(); await refreshGmailStatus(); }
+        if (e.data === 'gmail-error')      { popup?.close(); showError('step3-error', 'Gmail authorization failed. Please try again.'); }
+      }, { once: true });
+      const poll = setInterval(async () => {
+        if (popup?.closed) { clearInterval(poll); await refreshGmailStatus(); }
+      }, 1000);
+    } catch (e) {
+      showError('step3-error', 'Could not start Gmail authorization: ' + e.message);
+    }
   });
 
-  (async () => {
-    try {
-      const res  = await fetch('/auth/config');
-      const data = await res.json();
-      if (data.clientId) document.getElementById('client-id').value = data.clientId;
-      // Client secret is never returned from the server — if credentials are locked
-      // (set via env vars), disable the fields since the server ignores them anyway.
-      if (data.credentialsLocked) {
-        const cidEl = document.getElementById('client-id');
-        const csEl  = document.getElementById('client-secret');
-        cidEl.disabled = true;
-        csEl.disabled  = true;
-        csEl.placeholder = data.hasClientSecret ? '(set via environment)' : 'Not configured';
-      }
-      if (data.authorized) {
-        const el = document.getElementById('auth-status');
-        el.textContent = '✓ Authorized';
-        el.className   = 'auth-status authorized';
-      }
-    } catch (_) {}
-  })();
-
+  // Refresh Gmail status whenever the user navigates to step 3
   const _origGoTo = goTo;
-  goTo = function(n) {
-    _origGoTo(n);
-    if (n === 3) checkAuthStatus();
-  };
+  goTo = function(n) { _origGoTo(n); if (n === 3) refreshGmailStatus(); };
+
+  // ── SMTP auto-fill ────────────────────────────────────────────────────────
+  document.getElementById('smtp-user').addEventListener('change', () => {
+    const email  = document.getElementById('smtp-user').value.trim();
+    const domain = email.split('@')[1]?.toLowerCase() || '';
+    const hostEl = document.getElementById('smtp-host');
+    const portEl = document.getElementById('smtp-port');
+    if (!hostEl.value && !portEl.value) {
+      if (domain === 'gmail.com' || domain === 'googlemail.com') {
+        hostEl.value = 'smtp.gmail.com'; portEl.value = '587';
+      } else if (['outlook.com','hotmail.com','live.com'].includes(domain) || domain.endsWith('.onmicrosoft.com')) {
+        hostEl.value = 'smtp.office365.com'; portEl.value = '587';
+      }
+    }
+  });
 
   // ── Send helpers ──────────────────────────────────────────────────────────
+  function getSmtpConfig() {
+    return {
+      smtp_host: document.getElementById('smtp-host').value.trim(),
+      smtp_port: document.getElementById('smtp-port').value.trim(),
+      smtp_user: document.getElementById('smtp-user').value.trim(),
+      smtp_pass: document.getElementById('smtp-pass').value,
+      from_name: document.getElementById('from-name').value.trim(),
+    };
+  }
+
   function setSendUIBusy(busy) {
     document.getElementById('send-btn').disabled      = busy;
     document.getElementById('test-send-btn').disabled = busy;
     document.getElementById('send-btn').textContent   = busy ? 'Sending…' : 'Send All Emails';
   }
 
-  async function sendOne(gmail_user, from_name, item) {
+  async function sendOne(smtpConfig, item) {
     const res = await fetch('/send', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ gmail_user, from_name, emails: [item] }),
+      body:    JSON.stringify({ ...smtpConfig, emails: [item] }),
     });
     return res.json();
   }
@@ -1349,8 +1359,7 @@
 
   // ── Send ──────────────────────────────────────────────────────────────────
   async function runSendLoop(items) {
-    const gmail_user = document.getElementById('gmail-user').value.trim();
-    const from_name  = document.getElementById('from-name').value.trim();
+    const smtpConfig = getSmtpConfig();
     const total  = items.length;
     const bar    = document.getElementById('progress-bar');
     const status = document.getElementById('send-status');
@@ -1365,7 +1374,7 @@
 
       let ok = false, detail = '';
       try {
-        const data = await sendOne(gmail_user, from_name, item);
+        const data = await sendOne(smtpConfig, item);
         if (data.sent?.length) {
           ok = true;
         } else {
@@ -1380,7 +1389,7 @@
             failedN++;
             failedItems.push(items[j]);
           }
-          showError('step3-error', `Send aborted: ${data.abortReason}. Re-authorize Gmail and try again.`);
+          showError('step3-error', `Send aborted: ${data.abortReason}`);
           return { sentN, failedN, aborted: true, failedItems };
         }
       } catch (e) {
@@ -1400,13 +1409,13 @@
   }
 
   document.getElementById('send-btn').addEventListener('click', async () => {
-    const gmail_user = document.getElementById('gmail-user').value.trim();
     clearError('step3-error');
+    const smtp = getSmtpConfig();
 
-    if (!gmail_user)
-      return showError('step3-error', 'Enter your Gmail address before sending.');
-    if (!(await checkAuthStatus()))
-      return showError('step3-error', 'Authorize with Google before sending.');
+    if (!smtp.smtp_user)
+      return showError('step3-error', 'Enter your email address before sending.');
+    if (!gmailAuthorized && (!smtp.smtp_host || !smtp.smtp_pass))
+      return showError('step3-error', 'Enter your SMTP host and password, or sign in with Google.');
     if (!confirm(`Send ${allEmailsToSend.length} email(s)? This cannot be undone.`)) return;
 
     setSendUIBusy(true);
@@ -1436,17 +1445,15 @@
   });
 
   document.getElementById('retry-btn').addEventListener('click', async () => {
-    const gmail_user = document.getElementById('gmail-user').value.trim();
     clearError('step3-error');
 
     const retryBtn    = document.getElementById('retry-btn');
     const failedItems = retryBtn._failedItems || [];
     if (!failedItems.length) return;
 
-    if (!gmail_user)
-      return showError('step3-error', 'Enter your Gmail address before sending.');
-    if (!(await checkAuthStatus()))
-      return showError('step3-error', 'Authorize with Google before sending.');
+    const smtp = getSmtpConfig();
+    if (!smtp.smtp_user || (!gmailAuthorized && (!smtp.smtp_host || !smtp.smtp_pass)))
+      return showError('step3-error', 'Enter your SMTP settings before retrying.');
 
     setSendUIBusy(true);
     document.getElementById('retry-wrap').style.display = 'none';
@@ -1473,25 +1480,24 @@
 
   // ── Test email ────────────────────────────────────────────────────────────
   document.getElementById('test-send-btn').addEventListener('click', async () => {
-    const gmail_user = document.getElementById('gmail-user').value.trim();
     clearError('step3-error');
+    const smtp = getSmtpConfig();
 
-    if (!gmail_user)
-      return showError('step3-error', 'Enter your Gmail address first.');
+    if (!smtp.smtp_user)
+      return showError('step3-error', 'Enter your email address first.');
+    if (!gmailAuthorized && (!smtp.smtp_host || !smtp.smtp_pass))
+      return showError('step3-error', 'Enter your SMTP host and password first, or sign in with Google.');
     if (!allEmailsToSend.length)
       return showError('step3-error', 'Generate a preview first.');
-    if (!(await checkAuthStatus()))
-      return showError('step3-error', 'Authorize with Google before sending.');
 
     const btn = document.getElementById('test-send-btn');
     btn.disabled = true; btn.textContent = 'Sending…';
 
     // Send the first email in the batch to your own address so you see
     // exactly what a recipient will receive, with real name/code substituted.
-    const from_name = document.getElementById('from-name').value.trim();
-    const sample = { ...allEmailsToSend[0], email: gmail_user };
+    const sample = { ...allEmailsToSend[0], email: smtp.smtp_user };
     try {
-      const data = await sendOne(gmail_user, from_name, sample);
+      const data = await sendOne(smtp, sample);
       if (data.sent?.length) {
         btn.textContent = '✓ Test sent';
         setTimeout(() => { btn.disabled = false; btn.textContent = 'Send test to me'; }, 3000);

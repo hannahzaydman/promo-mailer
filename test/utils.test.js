@@ -2,7 +2,7 @@
 
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
-const { escHtml, sanitizeMimeHeader, htmlToPlainText, applyTemplate, parseDjList } = require('../utils');
+const { escHtml, sanitizeMimeHeader, htmlToPlainText, applyTemplate, parseRecipientList, isFatalSmtpError } = require('../utils');
 
 // ── escHtml ──────────────────────────────────────────────────────────────────
 
@@ -251,10 +251,10 @@ describe('applyTemplate', () => {
 
 // ── parseDjList ───────────────────────────────────────────────────────────────
 
-describe('parseDjList', () => {
+describe('parseRecipientList', () => {
   test('maps name and email from the given columns', () => {
     const rows = [{ name: 'DJ Phantom', email: 'dj@test.com' }];
-    assert.deepEqual(parseDjList(rows, 'name', 'email'), [
+    assert.deepEqual(parseRecipientList(rows, 'name', 'email'), [
       { name: 'DJ Phantom', email: 'dj@test.com' },
     ]);
   });
@@ -264,7 +264,7 @@ describe('parseDjList', () => {
       { name: 'DJ One', email: '' },
       { name: 'DJ Two', email: 'two@test.com' },
     ];
-    assert.deepEqual(parseDjList(rows, 'name', 'email'), [
+    assert.deepEqual(parseRecipientList(rows, 'name', 'email'), [
       { name: 'DJ Two', email: 'two@test.com' },
     ]);
   });
@@ -274,47 +274,47 @@ describe('parseDjList', () => {
       { name: '',       email: 'one@test.com' },
       { name: 'DJ Two', email: 'two@test.com' },
     ];
-    assert.deepEqual(parseDjList(rows, 'name', 'email'), [
+    assert.deepEqual(parseRecipientList(rows, 'name', 'email'), [
       { name: 'DJ Two', email: 'two@test.com' },
     ]);
   });
 
   test('trims whitespace from both name and email', () => {
     const rows = [{ name: '  DJ Phantom  ', email: '  dj@test.com  ' }];
-    assert.deepEqual(parseDjList(rows, 'name', 'email'), [
+    assert.deepEqual(parseRecipientList(rows, 'name', 'email'), [
       { name: 'DJ Phantom', email: 'dj@test.com' },
     ]);
   });
 
   test('filters out rows where name is whitespace-only after trim', () => {
     const rows = [{ name: '   ', email: 'dj@test.com' }];
-    assert.deepEqual(parseDjList(rows, 'name', 'email'), []);
+    assert.deepEqual(parseRecipientList(rows, 'name', 'email'), []);
   });
 
   test('handles null and undefined cell values without throwing', () => {
     const rows = [{ name: null, email: undefined }];
-    assert.deepEqual(parseDjList(rows, 'name', 'email'), []);
+    assert.deepEqual(parseRecipientList(rows, 'name', 'email'), []);
   });
 
   test('returns empty array when all rows are invalid', () => {
     const rows = [{ name: '', email: '' }, { name: '  ', email: '  ' }];
-    assert.deepEqual(parseDjList(rows, 'name', 'email'), []);
+    assert.deepEqual(parseRecipientList(rows, 'name', 'email'), []);
   });
 
   test('returns empty array for empty input', () => {
-    assert.deepEqual(parseDjList([], 'name', 'email'), []);
+    assert.deepEqual(parseRecipientList([], 'name', 'email'), []);
   });
 
   test('works with non-standard column names', () => {
     const rows = [{ artist: 'DJ Phantom', contact: 'dj@test.com' }];
-    assert.deepEqual(parseDjList(rows, 'artist', 'contact'), [
+    assert.deepEqual(parseRecipientList(rows, 'artist', 'contact'), [
       { name: 'DJ Phantom', email: 'dj@test.com' },
     ]);
   });
 
   test('silently drops all rows when column name does not exist', () => {
     const rows = [{ name: 'DJ Phantom', email: 'dj@test.com' }];
-    assert.deepEqual(parseDjList(rows, 'wrong_col', 'email'), []);
+    assert.deepEqual(parseRecipientList(rows, 'wrong_col', 'email'), []);
   });
 
   test('filters out rows where email has no @ (e.g. Excel number-formatted cell)', () => {
@@ -322,14 +322,14 @@ describe('parseDjList', () => {
       { name: 'DJ One', email: '45292' },      // Excel date serial number
       { name: 'DJ Two', email: 'dj@test.com' },
     ];
-    assert.deepEqual(parseDjList(rows, 'name', 'email'), [
+    assert.deepEqual(parseRecipientList(rows, 'name', 'email'), [
       { name: 'DJ Two', email: 'dj@test.com' },
     ]);
   });
 
   test('filters out rows where email is a plain word with no @', () => {
     const rows = [{ name: 'DJ Phantom', email: 'notanemail' }];
-    assert.deepEqual(parseDjList(rows, 'name', 'email'), []);
+    assert.deepEqual(parseRecipientList(rows, 'name', 'email'), []);
   });
 
   test('preserves order and handles multiple valid rows', () => {
@@ -338,10 +338,70 @@ describe('parseDjList', () => {
       { name: 'DJ Two',   email: 'two@test.com' },
       { name: 'DJ Three', email: 'three@test.com' },
     ];
-    assert.deepEqual(parseDjList(rows, 'name', 'email'), [
+    assert.deepEqual(parseRecipientList(rows, 'name', 'email'), [
       { name: 'DJ One',   email: 'one@test.com' },
       { name: 'DJ Two',   email: 'two@test.com' },
       { name: 'DJ Three', email: 'three@test.com' },
     ]);
+  });
+});
+
+// ── isFatalSmtpError ──────────────────────────────────────────────────────────
+
+describe('isFatalSmtpError', () => {
+  // Each fatal pattern
+  test('detects "invalid login"', () => {
+    assert.equal(isFatalSmtpError('535 5.7.8 Error: authentication failed: Invalid login'), true);
+  });
+
+  test('detects "authentication failed"', () => {
+    assert.equal(isFatalSmtpError('Authentication failed: bad credentials'), true);
+  });
+
+  test('detects "authentication unsuccessful"', () => {
+    assert.equal(isFatalSmtpError('454 4.7.0 Authentication unsuccessful'), true);
+  });
+
+  test('detects "too many login attempts"', () => {
+    assert.equal(isFatalSmtpError('Too many login attempts, please try again later'), true);
+  });
+
+  test('detects "daily sending limit exceeded"', () => {
+    assert.equal(isFatalSmtpError('Daily sending limit exceeded'), true);
+  });
+
+  test('detects "daily limit exceeded"', () => {
+    assert.equal(isFatalSmtpError('You have exceeded your daily limit exceeded for this account'), true);
+  });
+
+  test('detects "user rate limit exceeded"', () => {
+    assert.equal(isFatalSmtpError('User rate limit exceeded'), true);
+  });
+
+  // Case-insensitivity
+  test('is case-insensitive (all-caps)', () => {
+    assert.equal(isFatalSmtpError('AUTHENTICATION FAILED'), true);
+  });
+
+  test('is case-insensitive (mixed case)', () => {
+    assert.equal(isFatalSmtpError('Invalid Login: bad password'), true);
+  });
+
+  // Non-fatal errors should return false
+  test('returns false for a transient connection error', () => {
+    assert.equal(isFatalSmtpError('Connection timeout'), false);
+  });
+
+  test('returns false for a single recipient rejection', () => {
+    assert.equal(isFatalSmtpError('550 5.1.1 The email account does not exist'), false);
+  });
+
+  test('returns false for an empty string', () => {
+    assert.equal(isFatalSmtpError(''), false);
+  });
+
+  test('coerces non-string message without throwing', () => {
+    assert.equal(isFatalSmtpError(null), false);
+    assert.equal(isFatalSmtpError(undefined), false);
   });
 });

@@ -33,6 +33,11 @@
       font-family: 'Syne', sans-serif;
       min-height: 100vh;
       padding: 52px 20px 60px;
+      animation: bodyFadeIn 0.5s ease forwards;
+    }
+    @keyframes bodyFadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: translateY(0); }
     }
     #star-canvas {
       position: fixed;
@@ -182,8 +187,20 @@
       background: var(--border);
       margin: 0 12px;
       flex-shrink: 0;
-      transition: background 0.25s;
+      position: relative;
+      overflow: hidden;
     }
+    .step-connector::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: var(--accent-dim);
+      transform: scaleX(0);
+      transform-origin: left;
+      transition: transform 0.4s ease 0.1s;
+    }
+    .step-item.done + .step-connector::after { transform: scaleX(1); }
+
     .step-item.active .step-circle {
       border-color: var(--accent);
       background: var(--accent);
@@ -193,10 +210,20 @@
     .step-item.done .step-circle {
       border-color: var(--accent-dim);
       background: transparent;
+      color: transparent;
+    }
+    .step-item.done .step-circle::after {
+      content: '✓';
+      position: absolute;
       color: var(--accent-dim);
+      animation: checkIn 0.25s ease;
+    }
+    .step-circle { position: relative; }
+    @keyframes checkIn {
+      from { transform: scale(0) rotate(-20deg); opacity: 0; }
+      to   { transform: scale(1) rotate(0deg);   opacity: 1; }
     }
     .step-item.done .step-label { color: var(--accent-dim); }
-    .step-item.done + .step-connector { background: var(--accent-dim); }
 
     /* ── Cards ──────────────────────────────────────────────────────────────── */
     .card {
@@ -207,7 +234,24 @@
       max-width: 700px;
       margin: 0 auto 20px;
       transition: box-shadow 0.25s, border-color 0.25s;
+      position: relative;
+      overflow: hidden;
     }
+    .card::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 3px,
+        rgba(255,255,255,0.012) 3px,
+        rgba(255,255,255,0.012) 4px
+      );
+      pointer-events: none;
+      z-index: 0;
+    }
+    .card > * { position: relative; z-index: 1; }
     .card:hover {
       box-shadow: 0 0 0 1px rgba(68,85,255,0.18), 0 4px 32px rgba(68,85,255,0.07);
       border-color: rgba(68,85,255,0.22);
@@ -317,6 +361,7 @@
     /* ── Buttons ─────────────────────────────────────────────────────────────── */
     .btn {
       display: inline-flex; align-items: center; gap: 8px;
+      position: relative;
       background: var(--accent);
       color: #ffffff;
       font-weight: 700;
@@ -335,6 +380,18 @@
       box-shadow: 0 0 24px rgba(68, 85, 255, 0.2);
     }
     .btn:active { transform: translateY(1px); }
+    .btn { overflow: hidden; }
+    .btn-ripple {
+      position: absolute;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.18);
+      transform: scale(0);
+      animation: ripple 0.5s ease-out forwards;
+      pointer-events: none;
+    }
+    @keyframes ripple {
+      to { transform: scale(4); opacity: 0; }
+    }
     .btn:disabled { opacity: 0.25; cursor: not-allowed; box-shadow: none; transform: none; }
     .btn-secondary {
       background: transparent;
@@ -1944,6 +2001,21 @@
       .replace(/&/g,'&amp;').replace(/</g,'&lt;')
       .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
+
+  // ── Button ripple ────────────────────────────────────────────────────────
+  document.addEventListener('click', e => {
+    const btn = e.target.closest('.btn');
+    if (!btn || btn.disabled) return;
+    const rect   = btn.getBoundingClientRect();
+    const size   = Math.max(rect.width, rect.height);
+    const x      = e.clientX - rect.left - size / 2;
+    const y      = e.clientY - rect.top  - size / 2;
+    const ripple = document.createElement('span');
+    ripple.className = 'btn-ripple';
+    ripple.style.cssText = `width:${size}px;height:${size}px;left:${x}px;top:${y}px`;
+    btn.appendChild(ripple);
+    ripple.addEventListener('animationend', () => ripple.remove());
+  });
 
   // ── Top progress bar ─────────────────────────────────────────────────────
   const topBar = document.getElementById('top-progress');

@@ -49,6 +49,31 @@ const SESSION_SECRET = process.env.SESSION_SECRET  || 'local-dev-secret-change-i
 const ALLOWED_DOMAIN_RE = ALLOWED_DOMAIN
   ? new RegExp('@' + ALLOWED_DOMAIN.split('.').join('\\.') + '$', 'i')
   : null;
+
+// ── SMTP credential encryption ─────────────────────────────────────────────
+// AES-256-GCM encryption for SMTP passwords stored in Firestore sessions.
+// Key is derived from SESSION_SECRET so a Firestore data leak alone is not
+// enough to recover plaintext passwords — the server secret is also required.
+const SMTP_ENC_KEY = crypto.createHash('sha256').update(SESSION_SECRET).digest();
+
+function encryptSmtpPassword(plaintext) {
+  const iv         = crypto.randomBytes(12);
+  const cipher     = crypto.createCipheriv('aes-256-gcm', SMTP_ENC_KEY, iv);
+  const ciphertext = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+  const authTag    = cipher.getAuthTag();
+  return [iv, authTag, ciphertext].map(b => b.toString('hex')).join('.');
+}
+
+function decryptSmtpPassword(encrypted) {
+  const [ivHex, authTagHex, ciphertextHex] = encrypted.split('.');
+  const iv         = Buffer.from(ivHex, 'hex');
+  const authTag    = Buffer.from(authTagHex, 'hex');
+  const ciphertext = Buffer.from(ciphertextHex, 'hex');
+  const decipher   = crypto.createDecipheriv('aes-256-gcm', SMTP_ENC_KEY, iv);
+  decipher.setAuthTag(authTag);
+  return decipher.update(ciphertext, undefined, 'utf8') + decipher.final('utf8');
+}
+
 // OAuth credentials — from Secret Manager env vars in prod, config file locally
 const GOOGLE_CLIENT_ID     = process.env.GOOGLE_CLIENT_ID;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
@@ -365,7 +390,7 @@ app.post('/auth/login/smtp', express.urlencoded({ extended: false }), async (req
   try {
     await transporter.verify();
     req.session.user = { email: smtp_user, name: smtp_user };
-    req.session.smtpConfig = { host: smtp_host, port, secure, requireTLS, user: smtp_user, pass: smtp_pass };
+    req.session.smtpConfig = { host: smtp_host, port, secure, requireTLS, user: smtp_user, pass: encryptSmtpPassword(smtp_pass) };
     log('info', 'user_login_smtp', { email: smtp_user });
     res.redirect('/');
   } catch (e) {
@@ -884,13 +909,17 @@ app.post('/send', async (req, res) => {
     ? `"${from_name.trim().replace(/"/g, "'")}" <${fromEmail}>`
     : fromEmail;
 
+  const resolvedSmtpConfig = useSmtp
+    ? { ...req.session.smtpConfig, pass: decryptSmtpPassword(req.session.smtpConfig.pass) }
+    : null;
+
   const sent = [], failed = [];
 
   for (let i = 0; i < emails.length; i++) {
     const item = emails[i];
     try {
       if (useSmtp) {
-        await sendViaSmtp(req.session.smtpConfig, fromAddr, sanitizeMimeHeader(item.email), sanitizeMimeHeader(item.subject), item.body);
+        await sendViaSmtp(resolvedSmtpConfig, fromAddr, sanitizeMimeHeader(item.email), sanitizeMimeHeader(item.subject), item.body);
       } else {
         const token = await getGmailAccessToken(req.session);
         await sendViaGmail(token, fromAddr, sanitizeMimeHeader(item.email), sanitizeMimeHeader(item.subject), item.body);
@@ -898,7 +927,7 @@ app.post('/send', async (req, res) => {
       sent.push(item.email);
     } catch (e) {
       const errMsg = useSmtp
-        ? redactCredentials(e.message, req.session.smtpConfig?.pass)
+        ? redactCredentials(e.message, resolvedSmtpConfig.pass)
         : redactCredentials(e.message, GOOGLE_CLIENT_SECRET);
       failed.push({ email: item.email, error: errMsg });
       const fatal = useSmtp ? isFatalSmtpError(e.message) : isFatalGmailError(e.message);

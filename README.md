@@ -9,7 +9,7 @@ A web app for sending personalized promo emails to DJ lists with Bandcamp downlo
 1. Upload a DJ list (`.xlsx` or `.csv`) with names and email addresses — or enter recipients manually
 2. Add one or more releases, each with its own download codes (`.csv`) and email template
 3. Preview every personalized email before anything is sent
-4. Authorize with Gmail via OAuth and send in real-time with live progress
+4. Sign in with your email account and send in real-time with live progress
 
 Email templates support two placeholders:
 - `{name}` — replaced with the DJ's name
@@ -27,6 +27,8 @@ Codes are assigned one-to-one in spreadsheet order (row 1 DJ → row 1 code, etc
 - **Custom From name** — set a display name so emails arrive as `Label Name <you@domain.com>`
 - **Embargo note** — optionally append a "don't share until release day" note to each email
 - **Attribution footer** — "Sent with djpromo.net, a tool by Midnight Ecstasy" appended to every email
+- **Unsubscribe links** — every email includes a signed unsubscribe link; opt-outs are stored in Firestore and honored on future sends
+- **Bandcamp releases picker** — browse your label's recent releases directly in the app to fill in release details
 - **Manual recipient entry** — add DJs without uploading a spreadsheet
 - **Name column optional** — recipients can be email-only (no name required)
 - **Recipient deduplication** — duplicate emails flagged and removed at preview time
@@ -42,10 +44,10 @@ Codes are assigned one-to-one in spreadsheet order (row 1 DJ → row 1 code, etc
 |---|---|
 | Runtime | Node.js 20 |
 | Framework | Express |
-| File parsing | xlsx (SheetJS) — handles `.xlsx` and `.csv` |
+| File parsing | @e965/xlsx (SheetJS fork) — handles `.xlsx` and `.csv` |
 | File uploads | multer (memory storage, 10 MB limit) |
-| Email sending | Gmail API (via OAuth2, no SMTP) |
-| Session auth | express-session + Google OAuth (any Google account) |
+| Email sending | Gmail API (OAuth2) **or** any SMTP server (via nodemailer) |
+| Session auth | express-session + Google OAuth or SMTP credentials |
 | Session store | Firestore — survives Cloud Run restarts, scales across instances |
 | Secret storage | Google Cloud Secret Manager |
 | Token storage | Local `config.json` (dev) / Google Cloud Storage (production) |
@@ -64,10 +66,15 @@ promo-mailer/
 ├── firestoreSessionStore.js   # Custom Firestore-backed session store
 ├── public/
 │   ├── index.html             # Single-page frontend (HTML + CSS + JS)
+│   ├── star-trails.js         # Star trail canvas animation (login page background)
 │   ├── privacy.html           # Privacy policy (required for OAuth verification)
 │   └── terms.html             # Terms of service
 ├── test/
-│   └── utils.test.js          # Unit tests — run with: npm test
+│   ├── utils.test.js          # Unit tests for helper functions
+│   ├── security.test.js       # Security-focused tests
+│   ├── features.test.js       # Feature integration tests
+│   ├── startup.test.js        # Server startup validation tests
+│   └── logging.test.js        # Structured logging tests
 ├── test-data/
 │   ├── dj-list.csv            # 10 fake DJs all pointing to hannahzaydman@gmail.com
 │   └── download-codes.csv
@@ -88,14 +95,18 @@ cd ~/promo-mailer
 npm test
 ```
 
-Uses Node's built-in test runner — no `npm install` required for tests. Covers `escHtml`, `sanitizeMimeHeader`, `htmlToPlainText`, `applyTemplate`, and `parseDjList`.
+Uses Node's built-in test runner — no `npm install` required for tests. Covers helper functions, security, features, startup validation, and structured logging.
 
 ---
 
 ## Access & Authentication
 
 ### Logging in (production)
-Visit `https://djpromo.net` and click **Sign in with Google**. Any Google account can sign in. Sessions last 8 hours.
+Visit `https://djpromo.net` and sign in with either:
+- **SMTP** — enter your mail server settings directly (Gmail, Outlook, Yahoo, Proton, iCloud, Fastmail presets available)
+- **Google OAuth** — click "Continue with Google" (any Google account)
+
+Sessions last 8 hours.
 
 ### Logging in (local dev)
 No login required locally — the app opens directly unless `GOOGLE_CLIENT_ID` is set as an env var.
@@ -126,7 +137,8 @@ Set on Cloud Run. Secrets are stored in Secret Manager — not plaintext env var
 | `BUCKET_NAME` | Env var | `your-label-promo-config` |
 | `GOOGLE_CLIENT_ID` | Secret Manager → `google-client-id` | OAuth client ID |
 | `GOOGLE_CLIENT_SECRET` | Secret Manager → `google-client-secret` | OAuth client secret |
-| `SESSION_SECRET` | Secret Manager → `session-secret` | Random 32-byte hex, signs session cookies |
+| `SESSION_SECRET` | Secret Manager → `session-secret` | Random 32-byte hex, signs session cookies and unsubscribe tokens |
+| `ALLOWED_DOMAIN` | Env var (optional) | If set, restricts sign-in to a single email domain (e.g. `midnightecstasy.com`). Omit to allow any account. |
 
 ### Rotating the client secret
 If the OAuth client secret is ever compromised or reset in Google Cloud Console:
@@ -272,6 +284,9 @@ The app supports up to **10 releases** in a single session. Each release needs i
 
 **Redirected to login but sign-in fails**
 Make sure `https://djpromo.net/auth/login/callback` is listed as an authorized redirect URI in your OAuth client (APIs & Services → Credentials).
+
+**SMTP login fails with "invalid credentials"**
+For Gmail, use an [App Password](https://myaccount.google.com/apppasswords) — not your regular Google password. For Yahoo and iCloud, use an app-specific password from your account security settings. For Proton, Proton Mail Bridge must be running locally.
 
 **"Not enough codes" error**
 The codes CSV has fewer rows than the DJ list. Add more codes or reduce the DJ list.

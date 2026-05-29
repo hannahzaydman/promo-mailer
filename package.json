@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "server.js",
   "scripts": {
-    "test": "node --test test/utils.test.js test/security.test.js test/features.test.js test/startup.test.js test/logging.test.js"
+    "test": "node --test test/utils.test.js test/security.test.js test/features.test.js test/startup.test.js test/logging.test.js test/routes.test.js"
   },
   "dependencies": {
     "@e965/xlsx": "0.20.3",

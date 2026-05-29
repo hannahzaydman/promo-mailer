@@ -1,5 +1,8 @@
 'use strict';
 
+const crypto = require('crypto');
+const XLSX   = require('@e965/xlsx');
+
 /**
  * Escape HTML special characters to prevent XSS when inserting untrusted
  * strings into HTML content.
@@ -200,6 +203,22 @@ function isFatalSmtpError(message) {
   return FATAL_SMTP_ERRORS.some(pat => lower.includes(pat));
 }
 
+const FATAL_GMAIL_ERRORS = [
+  'invalid_grant',
+  'token has been expired or revoked',
+  'invalid credentials',
+  'daily sending limit exceeded',
+  'user rate limit exceeded',
+];
+
+/**
+ * Returns true if the Gmail API error message indicates a fatal condition where
+ * retrying remaining emails in the batch won't help.
+ */
+function isFatalGmailError(message) {
+  const lower = String(message).toLowerCase();
+  return FATAL_GMAIL_ERRORS.some(p => lower.includes(p));
+}
 
 /**
  * Verify that every required column name exists in spreadsheet rows.
@@ -217,4 +236,104 @@ function validateColumns(rows, required, context) {
   return null;
 }
 
-module.exports = { escHtml, sanitizeMimeHeader, htmlToPlainText, applyTemplate, parseRecipientList, partitionCodes, isFatalSmtpError, validateColumns, RateLimiter, validateInputLengths, redactCredentials };
+/**
+ * Parse an XLSX or CSV buffer into an array of row objects.
+ *
+ * - blankrows:true preserves blank rows so callers can warn when they're
+ *   skipped (blank rows in a codes file shift code-to-recipient alignment).
+ * - Strips UTF-8 BOM from column names — common in Windows/Excel CSV exports.
+ *   Without this, the first column is named '\uFEFFname' instead of 'name',
+ *   breaking auto-detection and column matching silently.
+ *
+ * @param {Buffer} buffer
+ * @returns {object[]}
+ */
+function readSpreadsheet(buffer) {
+  const wb    = XLSX.read(buffer, { type: 'buffer' });
+  const sheet = wb.Sheets[wb.SheetNames[0]];
+  const rows  = XLSX.utils.sheet_to_json(sheet, { defval: '', blankrows: true })
+    .filter(r => r != null && typeof r === 'object');
+  if (rows.length === 0) return rows;
+  const hasBom = Object.keys(rows[0]).some(k => k.startsWith('\uFEFF'));
+  if (!hasBom) return rows;
+  return rows.map(row => {
+    const cleaned = {};
+    for (const [key, val] of Object.entries(row)) {
+      cleaned[key.replace(/^\uFEFF/, '')] = val;
+    }
+    return cleaned;
+  });
+}
+
+/**
+ * Compute a short HMAC token for use in unsubscribe links.
+ * Scoped to a specific sender+recipient pair so tokens can't be reused
+ * across senders or recipients.
+ *
+ * @param {string} secret         - HMAC key (SESSION_SECRET in production)
+ * @param {string} senderEmail
+ * @param {string} recipientEmail
+ * @returns {string} 24-char hex token
+ */
+function unsubToken(secret, senderEmail, recipientEmail) {
+  return crypto.createHmac('sha256', secret)
+    .update(senderEmail + '\x00' + recipientEmail)
+    .digest('hex')
+    .slice(0, 24);
+}
+
+/**
+ * fetch() with an AbortController timeout — prevents external API calls from
+ * hanging indefinitely and exhausting Cloud Run connections.
+ *
+ * @param {string} url
+ * @param {object} [options]
+ * @param {number} [ms=10000]
+ * @returns {Promise<Response>}
+ */
+function fetchWithTimeout(url, options, ms) {
+  if (ms === undefined) ms = 10000;
+  const ctrl = new AbortController();
+  const t = setTimeout(function() { ctrl.abort(); }, ms);
+  return fetch(url, Object.assign({}, options || {}, { signal: ctrl.signal }))
+    .finally(function() { clearTimeout(t); });
+}
+
+/**
+ * Factory that returns encrypt/decrypt functions for SMTP passwords stored in
+ * sessions. Uses AES-256-GCM so a Firestore data leak alone is not sufficient
+ * to recover plaintext passwords — the server key is also required.
+ *
+ * @param {Buffer} key - 32-byte AES key (derive from SESSION_SECRET via SHA-256)
+ * @returns {{ encrypt(plaintext: string): string, decrypt(encrypted: string): string }}
+ */
+function createSmtpCrypto(key) {
+  function encrypt(plaintext) {
+    const iv         = crypto.randomBytes(12);
+    const cipher     = crypto.createCipheriv('aes-256-gcm', key, iv);
+    const ciphertext = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+    const authTag    = cipher.getAuthTag();
+    return [iv, authTag, ciphertext].map(b => b.toString('hex')).join('.');
+  }
+
+  function decrypt(encrypted) {
+    const [ivHex, authTagHex, ciphertextHex] = encrypted.split('.');
+    const iv         = Buffer.from(ivHex, 'hex');
+    const authTag    = Buffer.from(authTagHex, 'hex');
+    const ciphertext = Buffer.from(ciphertextHex, 'hex');
+    const decipher   = crypto.createDecipheriv('aes-256-gcm', key, iv);
+    decipher.setAuthTag(authTag);
+    return decipher.update(ciphertext, undefined, 'utf8') + decipher.final('utf8');
+  }
+
+  return { encrypt, decrypt };
+}
+
+module.exports = {
+  escHtml, sanitizeMimeHeader, htmlToPlainText, applyTemplate,
+  parseRecipientList, partitionCodes,
+  isFatalSmtpError, isFatalGmailError,
+  validateColumns, validateInputLengths, redactCredentials,
+  RateLimiter,
+  readSpreadsheet, unsubToken, createSmtpCrypto, fetchWithTimeout,
+};

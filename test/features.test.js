@@ -9,66 +9,50 @@
 
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
-const crypto = require('crypto');
-const fs = require('fs');
-const path = require('path');
+const { unsubToken } = require('../utils');
 
-// ── Extract helpers from server.js without starting Express/Firestore ─────────
-
-const serverSrc = fs.readFileSync(path.join(__dirname, '../server.js'), 'utf8');
-
-// Pull SESSION_SECRET default so token tests are self-contained
-const SESSION_SECRET = 'local-dev-secret-change-in-prod';
-
-// Extract and eval unsubToken from source
-function getUnsubToken() {
-  const start = serverSrc.indexOf('function unsubToken');
-  const end   = serverSrc.indexOf('\n}\n', start) + 3;
-  const src   = serverSrc.slice(start, end);
-  return new Function('crypto', 'SESSION_SECRET', `"use strict"; return (${src})`)(crypto, SESSION_SECRET);
-}
+// Fixed secret for deterministic tests
+const SECRET = 'local-dev-secret-change-in-prod';
 
 // ── 1. unsubToken ─────────────────────────────────────────────────────────────
 
 describe('unsubToken', () => {
-  const unsubToken = getUnsubToken();
-
   test('returns a non-empty string', () => {
-    const t = unsubToken('sender@example.com', 'dj@example.com');
+    const t = unsubToken(SECRET, 'sender@example.com', 'dj@example.com');
     assert.ok(typeof t === 'string' && t.length > 0);
   });
 
   test('is deterministic — same inputs produce the same token', () => {
-    const t1 = unsubToken('sender@example.com', 'dj@example.com');
-    const t2 = unsubToken('sender@example.com', 'dj@example.com');
+    const t1 = unsubToken(SECRET, 'sender@example.com', 'dj@example.com');
+    const t2 = unsubToken(SECRET, 'sender@example.com', 'dj@example.com');
     assert.equal(t1, t2);
   });
 
   test('is sender-scoped — different senders produce different tokens for the same recipient', () => {
-    const t1 = unsubToken('alice@label.com', 'dj@example.com');
-    const t2 = unsubToken('bob@label.com',   'dj@example.com');
+    const t1 = unsubToken(SECRET, 'alice@label.com', 'dj@example.com');
+    const t2 = unsubToken(SECRET, 'bob@label.com',   'dj@example.com');
     assert.notEqual(t1, t2);
   });
 
   test('is recipient-scoped — different recipients produce different tokens', () => {
-    const t1 = unsubToken('sender@label.com', 'dj1@example.com');
-    const t2 = unsubToken('sender@label.com', 'dj2@example.com');
+    const t1 = unsubToken(SECRET, 'sender@label.com', 'dj1@example.com');
+    const t2 = unsubToken(SECRET, 'sender@label.com', 'dj2@example.com');
     assert.notEqual(t1, t2);
   });
 
   test('swapping sender and recipient produces a different token', () => {
-    const t1 = unsubToken('a@x.com', 'b@x.com');
-    const t2 = unsubToken('b@x.com', 'a@x.com');
+    const t1 = unsubToken(SECRET, 'a@x.com', 'b@x.com');
+    const t2 = unsubToken(SECRET, 'b@x.com', 'a@x.com');
     assert.notEqual(t1, t2);
   });
 
   test('returns a hex string of the expected length (24 chars)', () => {
-    const t = unsubToken('sender@example.com', 'dj@example.com');
+    const t = unsubToken(SECRET, 'sender@example.com', 'dj@example.com');
     assert.match(t, /^[0-9a-f]{24}$/);
   });
 
   test('forged token (one char off) does not match', () => {
-    const real  = unsubToken('sender@example.com', 'dj@example.com');
+    const real   = unsubToken(SECRET, 'sender@example.com', 'dj@example.com');
     const forged = real.slice(0, -1) + (real.slice(-1) === 'a' ? 'b' : 'a');
     assert.notEqual(real, forged);
   });

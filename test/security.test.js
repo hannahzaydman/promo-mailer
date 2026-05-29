@@ -486,28 +486,15 @@ describe('fetchWithTimeout', () => {
     await new Promise((resolve) => server.close(resolve));
   });
 
-  // Load fetchWithTimeout from server.js in a way that avoids starting
-  // Express/Firestore. We do this by extracting and eval-ing just the function.
-  function getFetchWithTimeout() {
-    const fs = require('fs');
-    const src = fs.readFileSync(require('path').join(__dirname, '../server.js'), 'utf8');
-    const start = src.indexOf('function fetchWithTimeout');
-    const end = src.indexOf('\n}\n', start) + 3;
-    const fnSrc = src.slice(start, end);
-    return new Function('fetch', 'AbortController', 'setTimeout', 'clearTimeout', '"use strict"; return (' + fnSrc + ')')(
-      globalThis.fetch, AbortController, setTimeout, clearTimeout
-    );
-  }
+  const { fetchWithTimeout } = require('../utils');
 
   test('resolves with the response for a fast endpoint', async () => {
-    const fetchWithTimeout = getFetchWithTimeout();
     const res = await fetchWithTimeout(baseUrl + '/fast', {}, 3000);
     const body = await res.json();
     assert.equal(body.ok, true);
   });
 
   test('rejects with AbortError when the server does not respond within the timeout', async () => {
-    const fetchWithTimeout = getFetchWithTimeout();
     await assert.rejects(
       () => fetchWithTimeout(baseUrl + '/slow', {}, 100),
       (err) => {
@@ -521,7 +508,6 @@ describe('fetchWithTimeout', () => {
     // We can't wait 10s in a test, but we can verify the default is wired up
     // by passing ms=undefined and checking that the call still resolves for a
     // fast endpoint (i.e. options default handling works).
-    const fetchWithTimeout = getFetchWithTimeout();
     const res = await fetchWithTimeout(baseUrl + '/fast');
     assert.equal(res.status, 200);
   });

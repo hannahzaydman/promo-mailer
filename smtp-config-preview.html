@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SMTP Config Preview</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0c0b10;
+      --surface: #131118;
+      --surface2: #1b1922;
+      --border: #2a2635;
+      --border-soft: #201e29;
+      --accent: #4455ff;
+      --accent-dim: #2233cc;
+      --accent-glow: rgba(68, 85, 255, 0.12);
+      --text: #f0eef8;
+      --text-secondary: #8a8499;
+      --muted: #4d4a5a;
+      --danger: #ff4455;
+      --success: #33cc88;
+    }
+
+    html, body { background: var(--bg); color: var(--text); font-family: 'Syne', sans-serif; min-height: 100vh; }
+    body { padding: 52px 20px 60px; display: flex; flex-direction: column; align-items: center; }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 28px 32px;
+      position: relative;
+      overflow: hidden;
+      width: 100%;
+      max-width: 680px;
+      margin-bottom: 20px;
+    }
+    .card::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(ellipse at 60% 0%, rgba(68,85,255,0.06) 0%, transparent 70%);
+      pointer-events: none;
+      z-index: 0;
+    }
+    .card > * { position: relative; z-index: 1; }
+    .card h2 {
+      font-size: 0.65rem;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--text-secondary);
+      font-weight: 600;
+      margin-bottom: 22px;
+    }
+
+    .field { margin-bottom: 18px; }
+    label {
+      display: block;
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--text-secondary);
+      margin-bottom: 7px;
+    }
+    input, select {
+      width: 100%;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-family: inherit;
+      font-size: 0.88rem;
+      padding: 9px 13px;
+      outline: none;
+      transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    input:focus, select:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+    input::placeholder { color: var(--muted); }
+
+    .col-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .col-row-3 { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 16px; }
+
+    .hint {
+      font-size: 0.72rem;
+      color: var(--text-secondary);
+      margin-top: 6px;
+      line-height: 1.5;
+    }
+
+    /* Provider presets */
+    .provider-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 22px;
+    }
+    .provider-chip {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 6px 14px;
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      color: var(--text-secondary);
+      cursor: pointer;
+      transition: border-color 0.15s, color 0.15s, background 0.15s;
+      user-select: none;
+    }
+    .provider-chip:hover {
+      border-color: rgba(68,85,255,0.4);
+      color: var(--text);
+    }
+    .provider-chip.active {
+      border-color: var(--accent);
+      color: var(--text);
+      background: var(--accent-glow);
+    }
+    .provider-chip-label {
+      font-size: 0.65rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+
+    /* Auth toggle */
+    .auth-toggle {
+      display: flex;
+      gap: 0;
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      overflow: hidden;
+      margin-bottom: 22px;
+      width: fit-content;
+    }
+    .auth-toggle-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-secondary);
+      font-family: inherit;
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      padding: 8px 18px;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+    .auth-toggle-btn.active {
+      background: var(--accent);
+      color: #fff;
+    }
+    .auth-toggle-btn + .auth-toggle-btn {
+      border-left: 1px solid var(--border);
+    }
+
+    /* Test connection row */
+    .test-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-top: 6px;
+    }
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      background: var(--accent);
+      border: none;
+      border-radius: 9px;
+      color: #fff;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 0.8rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      padding: 10px 20px;
+      transition: background 0.15s, box-shadow 0.15s;
+    }
+    .btn:hover { background: #6673ff; box-shadow: 0 0 24px rgba(68,85,255,0.2); }
+    .btn-secondary {
+      background: transparent;
+      color: var(--text-secondary);
+      border: 1px solid var(--border);
+    }
+    .btn-secondary:hover { background: var(--surface2); color: var(--text); box-shadow: none; }
+
+    .connection-status {
+      font-size: 0.78rem;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .connection-status.ok { color: var(--success); }
+    .connection-status.err { color: var(--danger); }
+    .connection-status::before {
+      content: '';
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    /* Divider with label */
+    .or-divider {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin: 20px 0;
+      color: var(--muted);
+      font-size: 0.72rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+    .or-divider::before, .or-divider::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: var(--border-soft);
+    }
+
+    /* Google auth option */
+    .google-btn {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      color: var(--text);
+      font-family: inherit;
+      font-size: 0.82rem;
+      font-weight: 600;
+      padding: 10px 18px;
+      cursor: pointer;
+      transition: border-color 0.15s, box-shadow 0.15s;
+      width: 100%;
+      justify-content: center;
+    }
+    .google-btn:hover {
+      border-color: rgba(68,85,255,0.35);
+      box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+    .google-icon {
+      width: 18px; height: 18px;
+    }
+
+    .section-label {
+      font-size: 0.65rem;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--muted);
+      font-weight: 600;
+      margin-bottom: 14px;
+    }
+
+    .sending-from-display {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 13px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+    }
+    .sending-from-display .dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: var(--success);
+      flex-shrink: 0;
+    }
+    .sending-from-display span { color: var(--text); }
+  </style>
+</head>
+<body>
+
+<!-- ── SMTP Config card ───────────────────────────────────────────────────── -->
+<div class="card">
+  <h2>Sender Settings</h2>
+
+  <!-- Provider presets -->
+  <p class="section-label">Quick presets</p>
+  <div class="provider-row">
+    <div class="provider-chip" onclick="setPreset('gmail')">Gmail (SMTP)</div>
+    <div class="provider-chip" onclick="setPreset('outlook')">Outlook / Hotmail</div>
+    <div class="provider-chip" onclick="setPreset('yahoo')">Yahoo Mail</div>
+    <div class="provider-chip" onclick="setPreset('proton')">Proton Mail</div>
+    <div class="provider-chip active" onclick="setPreset('custom')">Custom</div>
+  </div>
+  <p class="hint" id="preset-hint" style="margin-top:-10px;margin-bottom:18px;display:none"></p>
+
+  <!-- Host / Port / Security -->
+  <div class="col-row-3">
+    <div class="field">
+      <label>SMTP Host</label>
+      <input type="text" id="smtp-host" placeholder="mail.example.com" />
+    </div>
+    <div class="field">
+      <label>Port</label>
+      <input type="number" id="smtp-port" placeholder="587" value="587" />
+    </div>
+    <div class="field">
+      <label>Security</label>
+      <select id="smtp-security">
+        <option value="starttls" selected>STARTTLS</option>
+        <option value="ssl">SSL/TLS</option>
+        <option value="none">None</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- Auth toggle -->
+  <p class="section-label" style="margin-top:4px">Authentication</p>
+  <div class="auth-toggle">
+    <button class="auth-toggle-btn active" onclick="setAuth('password')">Password</button>
+    <button class="auth-toggle-btn" onclick="setAuth('oauth2')">OAuth2</button>
+    <button class="auth-toggle-btn" onclick="setAuth('none')">None</button>
+  </div>
+
+  <!-- Credentials -->
+  <div id="creds-password">
+    <div class="col-row">
+      <div class="field">
+        <label>Username / Email</label>
+        <input type="email" id="smtp-user" placeholder="you@example.com" />
+      </div>
+      <div class="field">
+        <label>Password / App Password</label>
+        <input type="password" id="smtp-pass" placeholder="••••••••••••" />
+        <p class="hint">Use an <em>app password</em> if your provider requires 2FA.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- From Name -->
+  <div class="col-row">
+    <div class="field">
+      <label>From Name <span style="color:var(--muted);font-weight:400;letter-spacing:0">(optional)</span></label>
+      <input type="text" id="from-name" placeholder="e.g. Midnight Ecstasy" />
+    </div>
+    <div class="field">
+      <label>Sending From</label>
+      <div class="sending-from-display" id="sending-from">
+        <div class="dot"></div>
+        <span>you@example.com</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Test connection -->
+  <div class="test-row">
+    <button class="btn btn-secondary" onclick="testConnection()">Test Connection</button>
+    <div class="connection-status ok" id="conn-status">Connected</div>
+  </div>
+
+  <!-- OR divider + Google option -->
+  <div class="or-divider">or sign in with Google</div>
+
+  <button class="google-btn">
+    <svg class="google-icon" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+      <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+      <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" fill="#FBBC05"/>
+      <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+    </svg>
+    Continue with Google
+  </button>
+</div>
+
+<script>
+  const presets = {
+    gmail:   { host: 'smtp.gmail.com',        port: 587, security: 'starttls' },
+    outlook: { host: 'smtp.office365.com',    port: 587, security: 'starttls' },
+    yahoo:   { host: 'smtp.mail.yahoo.com',   port: 587, security: 'starttls' },
+    proton:  { host: '127.0.0.1',              port: 1025, security: 'starttls', hint: 'Requires <a href="https://proton.me/mail/bridge" target="_blank" rel="noopener" style="color:var(--accent)">Proton Mail Bridge</a> running on this machine.' },
+    custom:  { host: '',                       port: 587, security: 'starttls' },
+  };
+
+  function setPreset(key) {
+    document.querySelectorAll('.provider-chip').forEach(c => c.classList.remove('active'));
+    event.target.classList.add('active');
+    const p = presets[key];
+    document.getElementById('smtp-host').value     = p.host;
+    document.getElementById('smtp-port').value     = p.port;
+    document.getElementById('smtp-security').value = p.security;
+    const hintEl = document.getElementById('preset-hint');
+    if (p.hint) { hintEl.innerHTML = p.hint; hintEl.style.display = ''; }
+    else        { hintEl.style.display = 'none'; }
+  }
+
+  function setAuth(type) {
+    document.querySelectorAll('.auth-toggle-btn').forEach(b => b.classList.remove('active'));
+    event.target.classList.add('active');
+  }
+
+  function testConnection() {
+    const status = document.getElementById('conn-status');
+    status.className = 'connection-status';
+    status.textContent = 'Testing…';
+    setTimeout(() => {
+      status.className = 'connection-status ok';
+      status.textContent = 'Connected';
+    }, 1200);
+  }
+</script>
+</body>
+</html>

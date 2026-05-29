@@ -385,6 +385,7 @@ async function getGmailAccessToken(session) {
     refresh_token: t.refresh_token,
     expiry:        Date.now() + (data.expires_in || 3600) * 1000,
   };
+  log('warn', 'gmail_token_refreshed', { email: session.user?.email });
   return data.access_token;
 }
 
@@ -468,7 +469,14 @@ app.post('/get-columns', upload.single('recipient_file'), (req, res) => {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
     const rows = readSpreadsheet(req.file.buffer);
     if (!rows.length) return res.json({ error: 'File appears to be empty' });
-    res.json({ columns: Object.keys(rows[0]) });
+    const columns = Object.keys(rows[0]);
+    // Return a small preview so the UI can show a recipient list
+    const PREVIEW_ROWS = 8;
+    const preview = rows.slice(0, PREVIEW_ROWS).map(r => ({
+      name:  r[columns.find(c => /name|artist|dj|recipient|first/i.test(c))] ?? '',
+      email: r[columns.find(c => /email|e-mail|mail/i.test(c))] ?? '',
+    }));
+    res.json({ columns, preview, total: rows.length });
   } catch (e) {
     res.status(400).json({ error: `Could not read file: ${e.message}` });
   }

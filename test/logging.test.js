@@ -165,4 +165,14 @@ describe('log() sensitive field safety', () => {
     const raw = lines[0];
     assert.ok(!raw.includes('recipient@'));
   });
+
+  test('gmail_token_refreshed does not include the token value', () => {
+    const { log, lines } = makeLog(true);
+    log('warn', 'gmail_token_refreshed', { email: 'user@x.com' });
+    const parsed = JSON.parse(lines[0]);
+    assert.equal(parsed.event, 'gmail_token_refreshed');
+    assert.equal(parsed.email, 'user@x.com');
+    assert.ok(!('access_token'  in parsed));
+    assert.ok(!('refresh_token' in parsed));
+  });
 });

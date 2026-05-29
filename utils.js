@@ -82,6 +82,7 @@ function applyTemplate(template, name, code) {
 function parseRecipientList(rows, nameCol, emailCol) {
   const useNameCol = nameCol && nameCol !== '__none__';
   return rows
+    .filter(r => r != null && typeof r === 'object')   // drop blank/undefined rows XLSX can produce
     .map(r => ({
       name:  useNameCol ? String(r[nameCol] ?? '').trim() : '',
       email: String(r[emailCol] ?? '').trim(),

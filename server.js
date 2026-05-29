@@ -439,7 +439,7 @@ app.post('/preview', previewUpload, (req, res) => {
       const codesColErr = validateColumns(rawCodeRows, [codesCol], name);
       if (codesColErr) return res.status(400).json({ error: codesColErr });
 
-      const codes = rawCodeRows.map(r => String(r[codesCol] ?? '').trim()).filter(Boolean);
+      const codes = rawCodeRows.filter(r => r != null && typeof r === 'object').map(r => String(r[codesCol] ?? '').trim()).filter(Boolean);
 
       // Warn if blank rows were dropped from the codes file (row-alignment risk)
       const codesDropped = rawCodeRows.length - codes.length;

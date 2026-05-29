@@ -1,6 +1,6 @@
 const express = require('express');
 const multer  = require('multer');
-const XLSX    = require('xlsx');
+const XLSX    = require('@e965/xlsx');
 const path    = require('path');
 const crypto  = require('crypto');
 const session        = require('express-session');

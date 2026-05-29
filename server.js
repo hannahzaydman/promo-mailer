@@ -520,14 +520,20 @@ app.post('/preview', previewUpload, async (req, res) => {
     }
     if (!recipientList.length) return res.status(400).json({ error: 'No recipients remaining after filtering unsubscribed addresses.' });
 
-    // Warn about duplicate email addresses in the recipient list
-    const emailCount = {};
-    recipientList.forEach(recipient => { emailCount[recipient.email] = (emailCount[recipient.email] || 0) + 1; });
-    const dupes = Object.keys(emailCount).filter(e => emailCount[e] > 1);
-    if (dupes.length > 0) {
-      const preview = dupes.slice(0, 3).join(', ') + (dupes.length > 3 ? '…' : '');
-      warnings.push(`${dupes.length} duplicate email address${dupes.length !== 1 ? 'es' : ''} found — those recipients will receive multiple emails: ${preview}`);
+    // Deduplicate by email address — keep first occurrence
+    const seenEmails = new Set();
+    const deduped = [];
+    for (const r of recipientList) {
+      if (!seenEmails.has(r.email)) {
+        seenEmails.add(r.email);
+        deduped.push(r);
+      }
     }
+    const dupCount = recipientList.length - deduped.length;
+    if (dupCount > 0) {
+      warnings.push(`${dupCount} duplicate email address${dupCount !== 1 ? 'es' : ''} removed. Each recipient will receive one email.`);
+    }
+    recipientList = deduped;
 
     const releases = [];
     for (let i = 0; i < count; i++) {

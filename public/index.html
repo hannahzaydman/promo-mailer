@@ -1431,6 +1431,17 @@
       if (e.key === 'Enter')  { e.preventDefault(); insertBtn.click(); }
       if (e.key === 'Escape') { e.preventDefault(); cancelBtn.click(); }
     });
+
+    const bcLinkBtn = toolbar.querySelector('.bc-link-btn');
+    if (bcLinkBtn) {
+      bcLinkBtn.addEventListener('click', () => {
+        const editor = document.getElementById(`body-${id}`);
+        if (!editor) return;
+        editor.focus();
+        document.execCommand('insertHTML', false,
+          '<a href="https://bandcamp.com/yum?n={code}" target="_blank" rel="noopener noreferrer">Redeem your download code</a>');
+      });
+    }
   }
 
   // Update toolbar active states on selection change
@@ -1558,7 +1569,7 @@
           </div>
         </div>
         <p class="hint" style="margin-top:6px">
-          Don't have codes yet? <a href="https://bandcamp.com/download_codes" target="_blank" rel="noopener noreferrer" style="color:var(--accent)">Generate them on Bandcamp</a>.<br>
+          Don't have codes yet? Generate them from your Bandcamp music manager: <strong>Music → [your album] → Download Codes</strong>.<br>
           If your album is private (pre-release), make sure its URL slug is set to its
           final public value <em>before</em> generating codes — changing the slug later will break
           all previously issued codes.
@@ -1590,6 +1601,8 @@
               <button type="button" class="tool-btn link-btn" data-id="${id}" title="Insert link">
                 <svg viewBox="0 0 16 16" fill="none" width="14" height="14" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="display:block"><path d="M6.5 9.5a3.5 3.5 0 0 0 4.95 0l2-2a3.5 3.5 0 0 0-4.95-4.95l-1.25 1.25"/><path d="M9.5 6.5a3.5 3.5 0 0 0-4.95 0l-2 2a3.5 3.5 0 0 0 4.95 4.95l1.25-1.25"/></svg>
               </button>
+              <div class="toolbar-sep"></div>
+              <button type="button" class="tool-btn bc-link-btn" data-id="${id}" title="Insert Bandcamp redemption link" style="font-size:0.65rem;font-weight:700;letter-spacing:.02em;padding:0 6px">BC</button>
             </div>
             <div class="rich-body" id="body-${id}" contenteditable="true" spellcheck="true"
               data-placeholder="Hi {name}, here's your download code: {code}"></div>

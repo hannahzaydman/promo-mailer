@@ -1558,7 +1558,8 @@
           </div>
         </div>
         <p class="hint" style="margin-top:6px">
-          If your Bandcamp album is private (pre-release), make sure its URL slug is set to its
+          Don't have codes yet? <a href="https://bandcamp.com/download_codes" target="_blank" rel="noopener noreferrer" style="color:var(--accent)">Generate them on Bandcamp</a>.<br>
+          If your album is private (pre-release), make sure its URL slug is set to its
           final public value <em>before</em> generating codes — changing the slug later will break
           all previously issued codes.
         </p>
@@ -1765,6 +1766,7 @@
       });
 
       release.emails.forEach((e, ei) => {
+        if (!e) return; // guard against null/undefined entries
         const uid = `e${ri}-${ei}`;
         const card = document.createElement('div');
         card.className = 'email-card';
@@ -1856,6 +1858,7 @@
 
     for (let i = 0; i < total; i++) {
       const item = items[i];
+      if (!item) continue; // guard against undefined entries
       status.textContent = `Sending ${i + 1} of ${total}…`;
       const pct = Math.round((i / total) * 100);
       bar.style.width = `${pct}%`;

@@ -5,6 +5,8 @@ const path    = require('path');
 const crypto  = require('crypto');
 const session        = require('express-session');
 const FirestoreStore = require('./firestoreSessionStore')(session);
+const { Firestore }  = require('@google-cloud/firestore');
+const db = new Firestore();
 
 const app = express();
 app.set('trust proxy', 1); // Required for secure cookies behind Cloud Run
@@ -54,6 +56,54 @@ if (BASE_URL.startsWith('https') && SESSION_SECRET === 'local-dev-secret-change-
 // OAuth credentials — from Secret Manager env vars in prod, config file locally
 const GOOGLE_CLIENT_ID     = process.env.GOOGLE_CLIENT_ID;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
+
+// ── Unsubscribe helpers ────────────────────────────────────────────────────
+function unsubToken(senderEmail, recipientEmail) {
+  return crypto.createHmac('sha256', SESSION_SECRET)
+    .update(senderEmail + '\x00' + recipientEmail)
+    .digest('hex')
+    .slice(0, 24);
+}
+
+function unsubLink(baseUrl, senderEmail, recipientEmail) {
+  const token = unsubToken(senderEmail, recipientEmail);
+  return `${baseUrl}/unsubscribe?sender=${encodeURIComponent(senderEmail)}&email=${encodeURIComponent(recipientEmail)}&token=${token}`;
+}
+
+async function getUnsubscribes(senderEmail) {
+  const doc = await db.collection('unsubscribes').doc(senderEmail).get();
+  if (!doc.exists) return new Set();
+  return new Set(Object.keys(doc.data().emails || {}));
+}
+
+async function addUnsubscribe(senderEmail, recipientEmail) {
+  await db.collection('unsubscribes').doc(senderEmail).set(
+    { emails: { [recipientEmail]: true } },
+    { merge: true }
+  );
+}
+
+// ── Send count helpers (daily Gmail quota tracking) ────────────────────────
+const GMAIL_DAILY_LIMIT = 500;
+
+async function getDailyCount(senderEmail) {
+  const today = new Date().toISOString().slice(0, 10);
+  const doc = await db.collection('sendCounts').doc(senderEmail).get();
+  if (!doc.exists) return 0;
+  const d = doc.data();
+  return d.date === today ? (d.count || 0) : 0;
+}
+
+async function incrementDailyCount(senderEmail, n) {
+  const today = new Date().toISOString().slice(0, 10);
+  const ref = db.collection('sendCounts').doc(senderEmail);
+  await db.runTransaction(async t => {
+    const doc = await t.get(ref);
+    const d = doc.exists ? doc.data() : {};
+    const existing = d.date === today ? (d.count || 0) : 0;
+    t.set(ref, { date: today, count: existing + n });
+  });
+}
 
 // ── Rate limiters ──────────────────────────────────────────────────────────
 // 200 send requests per session per minute.  Keyed on session ID so each
@@ -230,6 +280,45 @@ app.get('/auth/logout', (req, res) => {
   req.session.destroy(() => res.redirect('/auth/login'));
 });
 
+// ── Unsubscribe (public — no auth required) ────────────────────────────────
+app.get('/unsubscribe', async (req, res) => {
+  const { sender, email, token } = req.query;
+  if (!sender || !email || !token) {
+    return res.status(400).send(unsubPage('Invalid unsubscribe link.', false));
+  }
+  const expected = unsubToken(sender, email);
+  if (!crypto.timingSafeEqual(Buffer.from(token), Buffer.from(expected))) {
+    return res.status(400).send(unsubPage('Invalid or expired unsubscribe link.', false));
+  }
+  try {
+    await addUnsubscribe(sender, email);
+    res.send(unsubPage(`${email} has been unsubscribed from future emails from ${sender}.`, true));
+  } catch (e) {
+    console.error('[unsubscribe error]', e);
+    res.status(500).send(unsubPage('Something went wrong. Please try again.', false));
+  }
+});
+
+function unsubPage(message, success) {
+  const color = success ? '#33cc88' : '#ff4455';
+  return `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>Unsubscribe - DJ Promo</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{background:#0c0b10}
+  body{background:#0c0b10;color:#f0eef8;font-family:'Syne',sans-serif;
+       display:flex;align-items:center;justify-content:center;min-height:100vh;padding:40px 20px}
+  .card{background:#131118;border:1px solid #2a2635;padding:40px 36px;max-width:420px;width:100%;text-align:center}
+  h1{font-size:1.2rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;margin-bottom:16px;color:${color}}
+  p{color:#8a8499;font-size:.85rem;line-height:1.6}
+</style></head>
+<body><div class="card">
+  <h1>${success ? 'Unsubscribed' : 'Error'}</h1>
+  <p>${message}</p>
+</div></body></html>`;
+}
+
 // Static assets served before auth so unauthenticated pages (login) can load them
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -237,9 +326,12 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use(requireAuth);
 
 // ── Auth info ──────────────────────────────────────────────────────────────
-app.get('/auth/me', (req, res) => {
+app.get('/auth/me', async (req, res) => {
   if (!req.session?.user) return res.status(401).json({ error: 'Not authenticated' });
-  res.json({ email: req.session.user.email, name: req.session.user.name });
+  const email = req.session.user.email;
+  let dailySent = 0;
+  try { dailySent = await getDailyCount(email); } catch { /* non-fatal */ }
+  res.json({ email, name: req.session.user.name, dailySent, gmailDailyLimit: GMAIL_DAILY_LIMIT });
 });
 
 async function getGmailAccessToken(session) {
@@ -358,7 +450,7 @@ const previewUpload = multer({ storage: multer.memoryStorage(), limits: { fileSi
   ...Array.from({ length: 10 }, (_, i) => ({ name: `codes_file_${i}`, maxCount: 1 })),
 ]);
 
-app.post('/preview', previewUpload, (req, res) => {
+app.post('/preview', previewUpload, async (req, res) => {
   try {
     const { name_col, email_col, release_count } = req.body;
     // Cap at 10 to match the UI limit and prevent runaway iteration
@@ -415,6 +507,19 @@ app.post('/preview', previewUpload, (req, res) => {
     recipientList = recipientList.concat(extraRecipients);
 
     if (!recipientList.length) return res.status(400).json({ error: 'No valid recipients found. Check that the correct email column is selected and that email addresses contain @.' });
+
+    // Filter out unsubscribed recipients
+    const senderEmail = req.session.user.email;
+    let unsubscribed = new Set();
+    try { unsubscribed = await getUnsubscribes(senderEmail); } catch { /* non-fatal */ }
+    if (unsubscribed.size > 0) {
+      const before = recipientList.length;
+      recipientList = recipientList.filter(r => !unsubscribed.has(r.email));
+      const skipped = before - recipientList.length;
+      if (skipped > 0) warnings.push(`${skipped} recipient${skipped !== 1 ? 's' : ''} skipped (previously unsubscribed).`);
+    }
+    if (!recipientList.length) return res.status(400).json({ error: 'No recipients remaining after filtering unsubscribed addresses.' });
+
     // Warn about duplicate email addresses in the recipient list
     const emailCount = {};
     recipientList.forEach(recipient => { emailCount[recipient.email] = (emailCount[recipient.email] || 0) + 1; });
@@ -468,12 +573,15 @@ app.post('/preview', previewUpload, (req, res) => {
         unusedCodes,
         emails: recipientList.map((recipient, j) => {
           const code = assignedCodes[j];
+          const bodyHtml = applyTemplate(body, recipient.name, code);
+          const link = unsubLink(BASE_URL, senderEmail, recipient.email);
+          const footer = `<p style="margin-top:24px;font-size:11px;color:#888">Don't want these emails? <a href="${link}" style="color:#888">Unsubscribe</a></p>`;
           return {
             name:    recipient.name,
             email:   recipient.email,
             code,
             subject: applyTemplate(subject, recipient.name, code),
-            body:    applyTemplate(body,    recipient.name, code),
+            body:    bodyHtml + footer,
             release: name,
           };
         }),
@@ -527,6 +635,9 @@ app.post('/send', async (req, res) => {
         return res.json({ sent, failed, aborted: true, abortReason: redactCredentials(e.message, GOOGLE_CLIENT_SECRET) });
       }
     }
+  }
+  if (sent.length > 0) {
+    incrementDailyCount(fromEmail, sent.length).catch(e => console.error('[sendCount error]', e));
   }
   res.json({ sent, failed });
 });

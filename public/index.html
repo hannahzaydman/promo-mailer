@@ -871,6 +871,7 @@
       <div class="field">
         <label>Sending From</label>
         <div id="sending-from" style="padding:10px 0;font-size:0.85rem;color:var(--text-secondary)">—</div>
+        <div id="daily-count-note" class="hint" style="display:none"></div>
       </div>
     </div>
   </div>
@@ -1422,6 +1423,13 @@
     .then(r => r.json())
     .then(d => {
       if (d.email) document.getElementById('sending-from').textContent = d.email;
+      if (typeof d.dailySent === 'number') {
+        const note = document.getElementById('daily-count-note');
+        const remaining = d.gmailDailyLimit - d.dailySent;
+        note.textContent = `${d.dailySent} sent today. ~${remaining} remaining (Gmail limit: ${d.gmailDailyLimit}/day).`;
+        note.style.display = 'block';
+        if (remaining <= 50) note.style.color = 'var(--danger)';
+      }
     })
     .catch(() => {});
 

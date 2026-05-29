@@ -137,8 +137,11 @@ async function incrementDailyCount(senderEmail, n) {
 // 200 send requests per session per minute.  Keyed on session ID so each
 // authenticated user has an independent quota.
 const sendRateLimiter = new RateLimiter(200, 60_000);
+// 10 login attempts per IP per 15 minutes — limits brute-force on SMTP and
+// OAuth login endpoints without blocking legitimate users who mistype once.
+const loginRateLimiter = new RateLimiter(10, 15 * 60_000);
 // Prune stale entries every 5 minutes to prevent unbounded Map growth.
-setInterval(() => sendRateLimiter.prune(), 5 * 60_000).unref();
+setInterval(() => { sendRateLimiter.prune(); loginRateLimiter.prune(); }, 5 * 60_000).unref();
 
 // ── Session ────────────────────────────────────────────────────────────────
 const sessionStore = new FirestoreStore();
@@ -337,6 +340,9 @@ app.get('/auth/login', (req, res) => {
 });
 
 app.post('/auth/login/smtp', express.urlencoded({ extended: false }), async (req, res) => {
+  if (!loginRateLimiter.isAllowed(req.ip)) {
+    return res.redirect('/auth/login?error=' + encodeURIComponent('Too many login attempts. Please wait 15 minutes and try again.'));
+  }
   const { smtp_host, smtp_port, smtp_security, smtp_user, smtp_pass } = req.body;
   if (!smtp_host || !smtp_port || !smtp_user || !smtp_pass) {
     return res.redirect('/auth/login?error=' + encodeURIComponent('All SMTP fields are required.'));
@@ -370,6 +376,9 @@ app.post('/auth/login/smtp', express.urlencoded({ extended: false }), async (req
 });
 
 app.get('/auth/login/google', (req, res) => {
+  if (!loginRateLimiter.isAllowed(req.ip)) {
+    return res.redirect('/auth/login?error=' + encodeURIComponent('Too many login attempts. Please wait 15 minutes and try again.'));
+  }
   if (!GOOGLE_CLIENT_ID) return res.send(LOGIN_PAGE('OAuth not configured. Set GOOGLE_CLIENT_ID env var.'));
 
   // CSRF protection: store a random state token in the session before

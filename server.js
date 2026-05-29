@@ -612,6 +612,7 @@ app.post('/preview', previewUpload, async (req, res) => {
     if (!recipientList.length) return res.status(400).json({ error: 'No valid recipients found. Check that the correct email column is selected and that email addresses contain @.' });
 
     // Filter out unsubscribed recipients
+    if (!req.session.user) return res.status(401).json({ error: 'Session expired. Please sign out and sign in again.' });
     const senderEmail = req.session.user.email;
     let unsubscribed = new Set();
     try { unsubscribed = await getUnsubscribes(senderEmail); } catch { /* non-fatal */ }
@@ -723,6 +724,7 @@ app.post('/send', async (req, res) => {
   const lenErr = validateInputLengths({ 'from_name': { value: from_name, max: 200 } });
   if (lenErr) return res.status(400).json({ error: lenErr });
 
+  if (!req.session.user) return res.status(401).json({ error: 'Session expired. Please sign out and sign in again.' });
   const fromEmail = req.session.user.email;
   const fromAddr  = from_name?.trim()
     ? `"${from_name.trim().replace(/"/g, "'")}" <${fromEmail}>`

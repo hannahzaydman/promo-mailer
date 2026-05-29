@@ -818,8 +818,8 @@
 
     /* ── Recipient file preview ──────────────────────────────────────────────── */
     .recipient-preview {
-      margin-top: 16px;
-      padding-top: 16px;
+      margin-top: 24px;
+      padding-top: 20px;
       border-top: 1px solid var(--border-soft);
       animation: stepIn 0.25s ease;
     }
@@ -1045,7 +1045,7 @@
 
     <div id="recipient-file-preview" class="recipient-preview hidden"></div>
 
-    <div id="col-selectors" class="hidden">
+    <div id="col-selectors" class="hidden" style="margin-top: 24px;">
       <div class="col-row">
         <div class="field">
           <label>Name Column <span style="color:var(--muted);font-weight:400;letter-spacing:0">(optional)</span></label>
@@ -1461,6 +1461,11 @@
             </div>
           </div>
         </div>
+        <p class="hint" style="margin-top:6px">
+          If your Bandcamp album is private (pre-release), make sure its URL slug is set to its
+          final public value <em>before</em> generating codes — changing the slug later will break
+          all previously issued codes.
+        </p>
         <div class="field hidden" id="codes-col-wrap-${id}">
           <label>Code Column</label>
           <select id="codes-col-${id}"></select>

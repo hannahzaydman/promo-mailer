@@ -363,6 +363,58 @@ function unsubPage(message, success) {
 // Static assets served before auth so unauthenticated pages (login) can load them
 app.use(express.static(path.join(__dirname, 'public')));
 
+// ── Bandcamp releases proxy ────────────────────────────────────────────────
+// Fetches label releases via the Bandcamp mobile API + /music page for URLs.
+// No auth required — public data, needs to load in the modal.
+const https = require('https');
+const RELEASES_CACHE = { data: null, fetchedAt: 0 };
+const RELEASES_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+function httpsGet(url) {
+  return new Promise((resolve, reject) => {
+    https.get(url, { headers: { 'User-Agent': 'promo-mailer/1.0' } }, res => {
+      const chunks = [];
+      res.on('data', c => chunks.push(c));
+      res.on('end', () => resolve(Buffer.concat(chunks).toString()));
+    }).on('error', reject);
+  });
+}
+
+app.get('/api/releases', async (req, res) => {
+  const now = Date.now();
+  if (RELEASES_CACHE.data && now - RELEASES_CACHE.fetchedAt < RELEASES_TTL_MS) {
+    return res.json(RELEASES_CACHE.data);
+  }
+
+  try {
+    // 1. Get album URLs from the label's /music page
+    const musicHtml = await httpsGet('https://midnightecstasy.bandcamp.com/music');
+    const urlMatches = [...musicHtml.matchAll(/href="(https?:\/\/[^"]+\/album\/[^"?]+)[^"]*"/g)];
+    const albumUrls = [...new Set(urlMatches.map(m => m[1]))].slice(0, 6);
+
+    // 2. Fetch each album page in parallel to extract og:image and og:title
+    const releases = await Promise.all(albumUrls.map(async link => {
+      try {
+        const html = await httpsGet(link);
+        const art   = (html.match(/<meta property="og:image" content="([^"]+)"/) || [])[1] || '';
+        const ogTitle = (html.match(/<meta property="og:title" content="([^"]+)"/) || [])[1] || '';
+        // og:title is typically "Album Name, by Artist" — strip the artist part
+        const title = ogTitle.split(', by')[0].trim() || link.split('/album/')[1]?.replace(/-/g, ' ') || '';
+        return { title, art, link };
+      } catch {
+        return { title: link.split('/album/')[1]?.replace(/-/g, ' ') || '', art: '', link };
+      }
+    }));
+
+    RELEASES_CACHE.data = releases.filter(r => r.title);
+    RELEASES_CACHE.fetchedAt = now;
+    res.json(RELEASES_CACHE.data);
+  } catch (err) {
+    log('error', 'releases_fetch_error', { message: err.message });
+    res.status(502).json({ error: 'Failed to fetch releases' });
+  }
+});
+
 // Apply auth middleware to all subsequent routes
 app.use(requireAuth);
 

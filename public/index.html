@@ -206,6 +206,11 @@
       padding: 28px 32px;
       max-width: 700px;
       margin: 0 auto 20px;
+      transition: box-shadow 0.25s, border-color 0.25s;
+    }
+    .card:hover {
+      box-shadow: 0 0 0 1px rgba(68,85,255,0.18), 0 4px 32px rgba(68,85,255,0.07);
+      border-color: rgba(68,85,255,0.22);
     }
     .card h2 {
       font-family: 'Syne', sans-serif;
@@ -739,6 +744,108 @@
       to   { opacity: 1; transform: translateY(0); }
     }
 
+    /* ── Top send progress bar ──────────────────────────────────────────────── */
+    #top-progress {
+      position: fixed;
+      top: 0; left: 0;
+      width: 0%;
+      height: 2px;
+      background: linear-gradient(90deg, var(--accent), #88aaff);
+      z-index: 10000;
+      transition: width 0.3s ease, opacity 0.4s ease;
+      opacity: 0;
+      box-shadow: 0 0 10px rgba(68,85,255,0.6);
+      pointer-events: none;
+    }
+    #top-progress.active { opacity: 1; }
+
+    /* ── Recipient file preview ──────────────────────────────────────────────── */
+    .recipient-preview {
+      margin-top: 16px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border-soft);
+      animation: stepIn 0.25s ease;
+    }
+    .recipient-preview-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+    .recipient-count-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--success);
+    }
+    .recipient-count-badge::before {
+      content: '';
+      display: block;
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--success);
+      box-shadow: 0 0 6px var(--success);
+    }
+    .preview-toggle-btn {
+      background: none;
+      border: none;
+      color: var(--muted);
+      font-size: 0.65rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      font-weight: 700;
+      cursor: pointer;
+      font-family: inherit;
+      transition: color 0.15s;
+      padding: 0;
+    }
+    .preview-toggle-btn:hover { color: var(--accent); }
+    .recipient-preview-table-wrap {
+      max-height: 180px;
+      overflow-y: auto;
+      border: 1px solid var(--border-soft);
+    }
+    .recipient-preview-table-wrap::-webkit-scrollbar { width: 3px; }
+    .recipient-preview-table-wrap::-webkit-scrollbar-track { background: transparent; }
+    .recipient-preview-table-wrap::-webkit-scrollbar-thumb { background: var(--border); }
+    .recipient-preview-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.8rem;
+    }
+    .recipient-preview-table th {
+      text-align: left;
+      font-size: 0.6rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted);
+      font-weight: 700;
+      padding: 6px 10px;
+      background: var(--surface2);
+      border-bottom: 1px solid var(--border);
+      position: sticky; top: 0;
+    }
+    .recipient-preview-table td {
+      padding: 6px 10px;
+      border-bottom: 1px solid var(--border-soft);
+      color: var(--text-secondary);
+    }
+    .recipient-preview-table tr:last-child td { border-bottom: none; }
+    .recipient-preview-table .td-name { color: var(--text); font-weight: 500; }
+    .preview-overflow-note {
+      text-align: center;
+      font-size: 0.68rem;
+      color: var(--muted);
+      padding: 7px;
+      background: var(--surface2);
+      border-top: 1px solid var(--border-soft);
+      letter-spacing: 0.06em;
+    }
+
     /* ── Toast notifications ─────────────────────────────────────────────────── */
     #toast-container {
       position: fixed;
@@ -818,6 +925,7 @@
 </head>
 <body>
 <canvas id="star-canvas"></canvas>
+<div id="top-progress"></div>
 <div id="toast-container"></div>
 
 <header>
@@ -877,6 +985,8 @@
         </div>
       </div>
     </div>
+
+    <div id="recipient-file-preview" class="recipient-preview hidden"></div>
 
     <div id="col-selectors" class="hidden">
       <div class="col-row">
@@ -1032,7 +1142,11 @@
       populateSelect('email-col', data.columns, autoGuess(data.columns, ['email','e-mail','mail']));
       document.getElementById('col-selectors').classList.remove('hidden');
       updateStep1State();
-      showToast(`${djFile.name} loaded — ${data.columns.length} columns detected`, 'success');
+      // Show recipient preview if server returned rows
+      if (data.preview?.length) {
+        renderRecipientPreview(data.preview, data.total ?? data.preview.length);
+      }
+      showToast(`${djFile.name} loaded — ${data.total ?? data.preview?.length ?? '?'} recipients`, 'success');
     } catch(e) { showError('step1-error', 'Could not read file.'); }
   });
 
@@ -1574,7 +1688,9 @@
     for (let i = 0; i < total; i++) {
       const item = items[i];
       status.textContent = `Sending ${i + 1} of ${total}…`;
-      bar.style.width = `${Math.round((i / total) * 100)}%`;
+      const pct = Math.round((i / total) * 100);
+      bar.style.width = `${pct}%`;
+      setTopProgress(pct);
 
       let ok = false, detail = '';
       try {
@@ -1628,6 +1744,7 @@
     const { sentN, failedN, aborted, failedItems } = await runSendLoop(allEmailsToSend);
 
     document.getElementById('progress-bar').style.width = '100%';
+    setTopProgress(100);
     document.getElementById('send-status').textContent = aborted
       ? `Aborted — ${sentN} sent, ${failedN} failed`
       : `Done — ${sentN} sent, ${failedN} failed`;
@@ -1826,6 +1943,62 @@
     return String(str)
       .replace(/&/g,'&amp;').replace(/</g,'&lt;')
       .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  // ── Top progress bar ─────────────────────────────────────────────────────
+  const topBar = document.getElementById('top-progress');
+  function setTopProgress(pct) {
+    topBar.style.width = pct + '%';
+    if (pct >= 100) {
+      topBar.classList.add('active');
+      setTimeout(() => { topBar.style.opacity = '0'; topBar.style.width = '0%'; }, 500);
+      setTimeout(() => { topBar.classList.remove('active'); }, 900);
+    } else if (pct > 0) {
+      topBar.classList.add('active');
+    }
+  }
+
+  // ── Recipient file preview ────────────────────────────────────────────────
+  let recipientPreviewData = []; // { name, email }[]
+
+  function renderRecipientPreview(rows, totalCount) {
+    recipientPreviewData = rows;
+    const wrap = document.getElementById('recipient-file-preview');
+    if (!wrap || !rows.length) { wrap?.classList.add('hidden'); return; }
+
+    const PREVIEW_LIMIT = 5;
+    const shown = rows.slice(0, PREVIEW_LIMIT);
+    const overflow = totalCount > PREVIEW_LIMIT;
+
+    wrap.innerHTML = `
+      <div class="recipient-preview-header">
+        <span class="recipient-count-badge">${totalCount} recipient${totalCount !== 1 ? 's' : ''} loaded</span>
+        <button class="preview-toggle-btn" id="recipient-preview-toggle">Hide preview ▲</button>
+      </div>
+      <div id="recipient-preview-body">
+        <div class="recipient-preview-table-wrap">
+          <table class="recipient-preview-table">
+            <thead><tr><th>Name</th><th>Email</th></tr></thead>
+            <tbody>
+              ${shown.map(r => `<tr>
+                <td class="td-name">${r.name ? esc(r.name) : '<span style="color:var(--muted);font-style:italic">—</span>'}</td>
+                <td>${esc(r.email)}</td>
+              </tr>`).join('')}
+            </tbody>
+          </table>
+          ${overflow ? `<div class="preview-overflow-note">+ ${totalCount - PREVIEW_LIMIT} more</div>` : ''}
+        </div>
+      </div>
+    `;
+
+    wrap.classList.remove('hidden');
+
+    document.getElementById('recipient-preview-toggle').addEventListener('click', function () {
+      const body = document.getElementById('recipient-preview-body');
+      const collapsed = body.style.display === 'none';
+      body.style.display = collapsed ? '' : 'none';
+      this.textContent = collapsed ? 'Hide preview ▲' : 'Show preview ▼';
+    });
   }
 
   // ── Toast notifications ───────────────────────────────────────────────────

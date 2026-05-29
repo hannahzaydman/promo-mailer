@@ -196,11 +196,16 @@ const LOGIN_PAGE = (msg = '') => `<!DOCTYPE html>
        display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:40px 20px;gap:24px}
   #star-canvas{position:fixed;inset:0;width:100%;height:100%;z-index:-1;pointer-events:none}
   .card{background:#131118;border:1px solid #2a2635;padding:40px 36px;
-        text-align:center;max-width:360px;width:100%}
+        text-align:center;max-width:420px;width:100%}
   .logo{width:64px;height:64px;object-fit:cover;display:block;margin:0 auto 20px}
   h1{font-size:1.4rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#f0eef8;margin-bottom:6px;line-height:1}
-  .sub{color:#8a8499;font-size:.68rem;letter-spacing:.2em;text-transform:uppercase;font-weight:500;margin-bottom:24px}
-  p{color:#8a8499;font-size:.82rem;margin-bottom:28px;line-height:1.6}
+  .sub{color:#8a8499;font-size:.68rem;letter-spacing:.2em;text-transform:uppercase;font-weight:500;margin-bottom:28px}
+  .features{list-style:none;margin-bottom:28px;display:flex;flex-direction:column;gap:10px;text-align:left}
+  .features li{display:flex;align-items:flex-start;gap:10px;font-size:.8rem;color:#c8c3d8;line-height:1.5}
+  .features li .icon{color:#4455ff;font-size:.85rem;flex-shrink:0;margin-top:2px}
+  .features li strong{color:#f0eef8;font-weight:700}
+  .divider{border:none;border-top:1px solid #2a2635;margin-bottom:24px}
+  p{color:#8a8499;font-size:.78rem;margin-bottom:24px;line-height:1.6}
   a{display:inline-flex;align-items:center;gap:10px;background:#4455ff;color:#ffffff;
     font-weight:700;font-size:.68rem;letter-spacing:.14em;text-transform:uppercase;
     border-radius:0;padding:13px 28px;text-decoration:none;font-family:'Syne',sans-serif;
@@ -215,6 +220,13 @@ const LOGIN_PAGE = (msg = '') => `<!DOCTYPE html>
   <img src="https://f4.bcbits.com/img/0042095815_10.jpg" class="logo" alt="Midnight Ecstasy" />
   <h1>Promo Mailer</h1>
   <div class="sub">Upload · Compose · Send</div>
+  <ul class="features">
+    <li><span class="icon">&#9675;</span><span><strong>Sends from your label's Gmail</strong> — every DJ gets a personal email straight from your address</span></li>
+    <li><span class="icon">&#9675;</span><span><strong>Bandcamp download codes</strong> — one unique code per DJ, works with private pre-release albums</span></li>
+    <li><span class="icon">&#9675;</span><span><strong>One link, one click</strong> — DJs redeem their code instantly, nothing to install</span></li>
+    <li><span class="icon">&#9675;</span><span><strong>Your own contact list</strong> — bring your DJ list as a spreadsheet, you stay in control</span></li>
+  </ul>
+  <hr class="divider" />
   <p>${ALLOWED_DOMAIN ? `Sign in with your ${ALLOWED_DOMAIN} account to continue.` : 'Sign in with Google to continue. You\'ll also authorize sending email from your account.'}</p>
   <a href="/auth/login/google">Sign in with Google</a>
   ${msg ? `<p class="err">${escHtml(msg)}</p>` : ''}

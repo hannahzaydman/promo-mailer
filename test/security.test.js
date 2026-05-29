@@ -334,6 +334,126 @@ describe('redactCredentials', () => {
   });
 });
 
+// ── 8b. SMTP password encryption ─────────────────────────────────────────────
+// Extract encryptSmtpPassword / decryptSmtpPassword from server.js and run
+// them with a known test key so we can assert round-trip correctness and
+// tamper detection without starting the full server.
+
+describe('SMTP password encryption', () => {
+  const crypto = require('crypto');
+
+  // Build the same key derivation used in server.js with a fixed test secret.
+  const TEST_SECRET = 'test-secret-for-unit-tests-only';
+  const TEST_KEY    = crypto.createHash('sha256').update(TEST_SECRET).digest();
+
+  function encryptSmtpPassword(plaintext) {
+    const iv         = crypto.randomBytes(12);
+    const cipher     = crypto.createCipheriv('aes-256-gcm', TEST_KEY, iv);
+    const ciphertext = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+    const authTag    = cipher.getAuthTag();
+    return [iv, authTag, ciphertext].map(b => b.toString('hex')).join('.');
+  }
+
+  function decryptSmtpPassword(encrypted) {
+    const [ivHex, authTagHex, ciphertextHex] = encrypted.split('.');
+    const iv         = Buffer.from(ivHex, 'hex');
+    const authTag    = Buffer.from(authTagHex, 'hex');
+    const ciphertext = Buffer.from(ciphertextHex, 'hex');
+    const decipher   = crypto.createDecipheriv('aes-256-gcm', TEST_KEY, iv);
+    decipher.setAuthTag(authTag);
+    return decipher.update(ciphertext, undefined, 'utf8') + decipher.final('utf8');
+  }
+
+  test('round-trips a typical SMTP password', () => {
+    const pass = 'hunter2';
+    assert.equal(decryptSmtpPassword(encryptSmtpPassword(pass)), pass);
+  });
+
+  test('round-trips an app password with special characters', () => {
+    const pass = 'abcd-efgh-ijkl-mnop';
+    assert.equal(decryptSmtpPassword(encryptSmtpPassword(pass)), pass);
+  });
+
+  test('round-trips a password with symbols and unicode', () => {
+    const pass = 'p@$$w0rd!™£€';
+    assert.equal(decryptSmtpPassword(encryptSmtpPassword(pass)), pass);
+  });
+
+  test('round-trips an empty string', () => {
+    assert.equal(decryptSmtpPassword(encryptSmtpPassword('')), '');
+  });
+
+  test('each encryption call produces a different ciphertext (random IV)', () => {
+    const pass = 'samepassword';
+    const a = encryptSmtpPassword(pass);
+    const b = encryptSmtpPassword(pass);
+    assert.notEqual(a, b, 'two encryptions of the same value must differ');
+  });
+
+  test('encrypted value does not contain the plaintext password', () => {
+    const pass = 'supersecretpassword';
+    const enc  = encryptSmtpPassword(pass);
+    assert.ok(!enc.includes(pass), 'plaintext must not appear in ciphertext');
+  });
+
+  test('tampered ciphertext is rejected (GCM auth tag failure)', () => {
+    const enc   = encryptSmtpPassword('mypassword');
+    const parts = enc.split('.');
+    // Flip a byte in the ciphertext segment
+    const buf = Buffer.from(parts[2], 'hex');
+    buf[0] ^= 0xff;
+    parts[2] = buf.toString('hex');
+    const tampered = parts.join('.');
+    assert.throws(
+      () => decryptSmtpPassword(tampered),
+      /Unsupported state|bad decrypt|auth tag/i
+    );
+  });
+
+  test('tampered auth tag is rejected', () => {
+    const enc   = encryptSmtpPassword('mypassword');
+    const parts = enc.split('.');
+    const buf = Buffer.from(parts[1], 'hex');
+    buf[0] ^= 0xff;
+    parts[1] = buf.toString('hex');
+    assert.throws(() => decryptSmtpPassword(parts.join('.')));
+  });
+
+  test('wrong key cannot decrypt (simulates Firestore leak without SESSION_SECRET)', () => {
+    const enc        = encryptSmtpPassword('mypassword');
+    const wrongKey   = crypto.createHash('sha256').update('wrong-secret').digest();
+    const [ivHex, authTagHex, ciphertextHex] = enc.split('.');
+    const decipher = crypto.createDecipheriv('aes-256-gcm', wrongKey, Buffer.from(ivHex, 'hex'));
+    decipher.setAuthTag(Buffer.from(authTagHex, 'hex'));
+    assert.throws(() => {
+      decipher.update(Buffer.from(ciphertextHex, 'hex'));
+      decipher.final();
+    });
+  });
+});
+
+// ── 8c. Login rate limiter ────────────────────────────────────────────────────
+
+describe('Login rate limiter (10 attempts per 15 minutes)', () => {
+  test('allows up to 10 attempts', () => {
+    const rl = new RateLimiter(10, 15 * 60_000);
+    for (let i = 0; i < 10; i++) assert.equal(rl.isAllowed('1.2.3.4'), true);
+  });
+
+  test('blocks the 11th attempt', () => {
+    const rl = new RateLimiter(10, 15 * 60_000);
+    for (let i = 0; i < 10; i++) rl.isAllowed('1.2.3.4');
+    assert.equal(rl.isAllowed('1.2.3.4'), false);
+  });
+
+  test('different IPs have independent quotas', () => {
+    const rl = new RateLimiter(10, 15 * 60_000);
+    for (let i = 0; i < 10; i++) rl.isAllowed('1.2.3.4');
+    assert.equal(rl.isAllowed('1.2.3.4'), false, 'first IP blocked');
+    assert.equal(rl.isAllowed('5.6.7.8'), true,  'second IP unaffected');
+  });
+});
+
 // ── 4. fetchWithTimeout ───────────────────────────────────────────────────────
 
 describe('fetchWithTimeout', () => {

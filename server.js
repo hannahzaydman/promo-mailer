@@ -94,9 +94,7 @@ function requireAuth(req, res, next) {
   // No Google credentials configured — let through so app is accessible
   if (!GOOGLE_CLIENT_ID) return next();
 
-  // Send unauthenticated users to the landing page; the login flow is
-  // reachable from there via the "Sign in with Google" CTA.
-  res.redirect('/landing.html');
+  res.redirect('/auth/login');
 }
 
 // fetch() with an AbortController timeout — prevents Google OAuth calls from hanging

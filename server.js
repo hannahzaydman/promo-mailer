@@ -48,14 +48,23 @@ const SESSION_SECRET = process.env.SESSION_SECRET  || 'local-dev-secret-change-i
 const ALLOWED_DOMAIN_RE = ALLOWED_DOMAIN
   ? new RegExp('@' + ALLOWED_DOMAIN.split('.').join('\\.') + '$', 'i')
   : null;
-if (BASE_URL.startsWith('https') && SESSION_SECRET === 'local-dev-secret-change-in-prod') {
-  console.error('FATAL: SESSION_SECRET env var is not set. Refusing to start in production.');
-  process.exit(1);
-}
-
 // OAuth credentials — from Secret Manager env vars in prod, config file locally
 const GOOGLE_CLIENT_ID     = process.env.GOOGLE_CLIENT_ID;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
+
+// ── Startup validation ─────────────────────────────────────────────────────
+// Fail fast in production rather than silently misbehaving.
+if (BASE_URL.startsWith('https')) {
+  const missing = [
+    SESSION_SECRET === 'local-dev-secret-change-in-prod' && 'SESSION_SECRET',
+    !GOOGLE_CLIENT_ID     && 'GOOGLE_CLIENT_ID',
+    !GOOGLE_CLIENT_SECRET && 'GOOGLE_CLIENT_SECRET',
+  ].filter(Boolean);
+  if (missing.length) {
+    console.error(`FATAL: Missing required env vars: ${missing.join(', ')}. Refusing to start.`);
+    process.exit(1);
+  }
+}
 
 // ── Unsubscribe helpers ────────────────────────────────────────────────────
 function unsubToken(senderEmail, recipientEmail) {

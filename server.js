@@ -52,6 +52,23 @@ const ALLOWED_DOMAIN_RE = ALLOWED_DOMAIN
 const GOOGLE_CLIENT_ID     = process.env.GOOGLE_CLIENT_ID;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
 
+// ── Structured logging ─────────────────────────────────────────────────────
+// In production (https) emit newline-delimited JSON for Cloud Run / Cloud Logging.
+// Locally emit readable text so the console stays scannable.
+const IS_PROD = BASE_URL.startsWith('https');
+
+function log(level, event, data = {}) {
+  if (IS_PROD) {
+    // Cloud Logging severity mapping
+    const severity = level === 'error' ? 'ERROR' : level === 'warn' ? 'WARNING' : 'INFO';
+    process.stdout.write(JSON.stringify({ severity, event, ...data }) + '\n');
+  } else {
+    const prefix = level === 'error' ? '[ERROR]' : level === 'warn' ? '[WARN]' : '[INFO]';
+    const extra = Object.keys(data).length ? ' ' + JSON.stringify(data) : '';
+    console.log(`${prefix} ${event}${extra}`);
+  }
+}
+
 // ── Startup validation ─────────────────────────────────────────────────────
 // Fail fast in production rather than silently misbehaving.
 if (BASE_URL.startsWith('https')) {
@@ -61,7 +78,7 @@ if (BASE_URL.startsWith('https')) {
     !GOOGLE_CLIENT_SECRET && 'GOOGLE_CLIENT_SECRET',
   ].filter(Boolean);
   if (missing.length) {
-    console.error(`FATAL: Missing required env vars: ${missing.join(', ')}. Refusing to start.`);
+    log('error', 'startup_validation_failed', { missing });
     process.exit(1);
   }
 }
@@ -126,7 +143,7 @@ const sessionStore = new FirestoreStore();
 // Log Firestore session store errors so they surface in Cloud Run logs
 // instead of silently failing (which would cause every request to appear
 // unauthenticated and flood the login page with confusing redirects).
-sessionStore.on('error', err => console.error('[session store error]', err));
+sessionStore.on('error', err => log('error', 'session_store_error', { error: err.message }));
 app.use(session({
   store:             sessionStore,
   secret:            SESSION_SECRET,
@@ -278,14 +295,17 @@ app.get('/auth/login/callback', async (req, res) => {
       refresh_token: tokens.refresh_token,
       expiry:        Date.now() + (tokens.expires_in || 3600) * 1000,
     };
+    log('info', 'user_login', { email: user.email });
     res.redirect('/');
   } catch (e) {
     const msg = e.name === 'AbortError' ? 'Google sign-in timed out. Please try again.' : e.message;
+    log('error', 'auth_callback_error', { error: msg });
     res.redirect('/auth/login?error=' + encodeURIComponent(msg));
   }
 });
 
 app.get('/auth/logout', (req, res) => {
+  log('info', 'user_logout', { email: req.session?.user?.email });
   req.session.destroy(() => res.redirect('/auth/login'));
 });
 
@@ -303,7 +323,7 @@ app.get('/unsubscribe', async (req, res) => {
     await addUnsubscribe(sender, email);
     res.send(unsubPage(`${email} has been unsubscribed from future emails from ${sender}.`, true));
   } catch (e) {
-    console.error('[unsubscribe error]', e);
+    log('error', 'unsubscribe_error', { error: e.message });
     res.status(500).send(unsubPage('Something went wrong. Please try again.', false));
   }
 });
@@ -647,14 +667,17 @@ app.post('/send', async (req, res) => {
       if (isFatalGmailError(e.message)) {
         for (let j = i + 1; j < emails.length; j++)
           failed.push({ email: emails[j].email, error: 'Aborted — see previous error' });
-        return res.json({ sent, failed, aborted: true, abortReason: redactCredentials(e.message, GOOGLE_CLIENT_SECRET) });
+        const abortReason = redactCredentials(e.message, GOOGLE_CLIENT_SECRET);
+        log('error', 'send_aborted', { sender: fromEmail, sent: sent.length, failed: failed.length, reason: abortReason });
+        return res.json({ sent, failed, aborted: true, abortReason });
       }
     }
   }
+  log('info', 'send_complete', { sender: fromEmail, sent: sent.length, failed: failed.length });
   if (sent.length > 0) {
-    incrementDailyCount(fromEmail, sent.length).catch(e => console.error('[sendCount error]', e));
+    incrementDailyCount(fromEmail, sent.length).catch(e => log('error', 'send_count_error', { error: e.message }));
   }
   res.json({ sent, failed });
 });
 
-app.listen(PORT, () => console.log(`Promo Mailer running at ${BASE_URL}`));
+app.listen(PORT, () => log('info', 'server_start', { url: BASE_URL }));

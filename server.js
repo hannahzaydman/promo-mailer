@@ -1,8 +1,9 @@
-const express = require('express');
-const multer  = require('multer');
-const XLSX    = require('@e965/xlsx');
-const path    = require('path');
-const crypto  = require('crypto');
+const express    = require('express');
+const multer     = require('multer');
+const XLSX       = require('@e965/xlsx');
+const path       = require('path');
+const crypto     = require('crypto');
+const nodemailer = require('nodemailer');
 const session        = require('express-session');
 const FirestoreStore = require('./firestoreSessionStore')(session);
 const { Firestore }  = require('@google-cloud/firestore');
@@ -74,12 +75,13 @@ function log(level, event, data = {}) {
 if (BASE_URL.startsWith('https')) {
   const missing = [
     SESSION_SECRET === 'local-dev-secret-change-in-prod' && 'SESSION_SECRET',
-    !GOOGLE_CLIENT_ID     && 'GOOGLE_CLIENT_ID',
-    !GOOGLE_CLIENT_SECRET && 'GOOGLE_CLIENT_SECRET',
   ].filter(Boolean);
   if (missing.length) {
     log('error', 'startup_validation_failed', { missing });
     process.exit(1);
+  }
+  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
+    log('warn', 'google_oauth_not_configured', { note: 'Google sign-in disabled; SMTP login only' });
   }
 }
 
@@ -183,7 +185,7 @@ function fetchWithTimeout(url, options, ms) {
     .finally(function() { clearTimeout(t); });
 }
 
-// ── Google login routes ────────────────────────────────────────────────────
+// ── Login routes ───────────────────────────────────────────────────────────
 const LOGIN_PAGE = (msg = '') => `<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><title>Promo Mailer</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -196,7 +198,7 @@ const LOGIN_PAGE = (msg = '') => `<!DOCTYPE html>
        display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:40px 20px;gap:24px}
   #star-canvas{position:fixed;inset:0;width:100%;height:100%;z-index:-1;pointer-events:none}
   .card{background:#131118;border:1px solid #2a2635;padding:40px 36px;
-        text-align:center;max-width:420px;width:100%}
+        text-align:center;max-width:440px;width:100%}
   .logo{width:64px;height:64px;object-fit:cover;display:block;margin:0 auto 20px}
   h1{font-size:1.4rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#f0eef8;margin-bottom:6px;line-height:1}
   .sub{color:#8a8499;font-size:.68rem;letter-spacing:.2em;text-transform:uppercase;font-weight:500;margin-bottom:28px}
@@ -204,14 +206,35 @@ const LOGIN_PAGE = (msg = '') => `<!DOCTYPE html>
   .features li{display:flex;align-items:flex-start;gap:10px;font-size:.8rem;color:#c8c3d8;line-height:1.5}
   .features li .icon{color:#4455ff;font-size:.85rem;flex-shrink:0;margin-top:2px}
   .features li strong{color:#f0eef8;font-weight:700}
-  .divider{border:none;border-top:1px solid #2a2635;margin-bottom:24px}
-  p{color:#8a8499;font-size:.78rem;margin-bottom:24px;line-height:1.6}
-  a{display:inline-flex;align-items:center;gap:10px;background:#4455ff;color:#ffffff;
-    font-weight:700;font-size:.68rem;letter-spacing:.14em;text-transform:uppercase;
-    border-radius:0;padding:13px 28px;text-decoration:none;font-family:'Syne',sans-serif;
-    transition:background .15s}
-  a:hover{background:#6673ff}
-  .err{color:#ff4455;font-size:.78rem;margin-top:16px;letter-spacing:.04em}
+  .divider{border:none;border-top:1px solid #2a2635;margin:24px 0}
+  .section-label{font-size:.62rem;letter-spacing:.18em;text-transform:uppercase;color:#4d4a5a;font-weight:600;margin-bottom:14px;text-align:left}
+  /* SMTP form */
+  .field{margin-bottom:14px;text-align:left}
+  label{display:block;font-size:.68rem;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:#8a8499;margin-bottom:6px}
+  input,select{width:100%;background:#1b1922;border:1px solid #2a2635;border-radius:6px;color:#f0eef8;
+    font-family:'Syne',sans-serif;font-size:.84rem;padding:9px 12px;outline:none;transition:border-color .15s,box-shadow .15s}
+  input:focus,select:focus{border-color:#4455ff;box-shadow:0 0 0 3px rgba(68,85,255,.12)}
+  input::placeholder{color:#4d4a5a}
+  .row2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .row3{display:grid;grid-template-columns:2fr 1fr 1fr;gap:12px}
+  .presets{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px}
+  .chip{background:#1b1922;border:1px solid #2a2635;border-radius:6px;padding:5px 11px;
+        font-size:.65rem;font-weight:600;letter-spacing:.04em;color:#8a8499;cursor:pointer;transition:border-color .15s,color .15s}
+  .chip:hover{border-color:rgba(68,85,255,.4);color:#f0eef8}
+  .chip.active{border-color:#4455ff;color:#f0eef8;background:rgba(68,85,255,.1)}
+  .hint{font-size:.68rem;color:#8a8499;margin-top:5px;line-height:1.5}
+  /* Buttons */
+  .btn-smtp{display:block;width:100%;background:#4455ff;border:none;border-radius:6px;color:#fff;
+    cursor:pointer;font-family:'Syne',sans-serif;font-size:.72rem;font-weight:700;letter-spacing:.1em;
+    text-transform:uppercase;padding:12px;transition:background .15s;margin-top:4px}
+  .btn-smtp:hover{background:#6673ff}
+  .btn-smtp:disabled{opacity:.4;cursor:not-allowed}
+  .google-btn{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;
+    background:#1b1922;border:1px solid #2a2635;border-radius:6px;color:#f0eef8;
+    font-family:'Syne',sans-serif;font-size:.78rem;font-weight:600;padding:11px;
+    cursor:pointer;text-decoration:none;transition:border-color .15s,box-shadow .15s}
+  .google-btn:hover{border-color:rgba(68,85,255,.35);box-shadow:0 0 0 3px rgba(68,85,255,.1)}
+  .err{color:#ff4455;font-size:.75rem;margin-top:14px;letter-spacing:.04em;text-align:left}
   footer{font-size:.6rem;letter-spacing:.18em;text-transform:uppercase;color:#4d4a5a}
 </style></head>
 <body>
@@ -221,22 +244,129 @@ const LOGIN_PAGE = (msg = '') => `<!DOCTYPE html>
   <h1>Promo Mailer</h1>
   <div class="sub">Upload · Compose · Send</div>
   <ul class="features">
-    <li><span class="icon">&#9675;</span><span><strong>Sends from your label's Gmail</strong> — every DJ gets a personal email straight from your address</span></li>
+    <li><span class="icon">&#9675;</span><span><strong>Sends from your email account</strong> — every DJ gets a personal email straight from your address</span></li>
     <li><span class="icon">&#9675;</span><span><strong>Bandcamp download codes</strong> — one unique code per DJ, works with private pre-release albums</span></li>
     <li><span class="icon">&#9675;</span><span><strong>One link, one click</strong> — DJs redeem their code instantly, nothing to install</span></li>
     <li><span class="icon">&#9675;</span><span><strong>Your own contact list</strong> — bring your DJ list as a spreadsheet, you stay in control</span></li>
   </ul>
   <hr class="divider" />
-  <p>${ALLOWED_DOMAIN ? `Sign in with your ${ALLOWED_DOMAIN} account to continue.` : 'Sign in with Google to continue. You\'ll also authorize sending email from your account.'}</p>
-  <a href="/auth/login/google">Sign in with Google</a>
+
+  <!-- SMTP login form -->
+  <p class="section-label">Connect your email</p>
+  <div class="presets">
+    <span class="chip" onclick="setPreset('gmail')">Gmail</span>
+    <span class="chip" onclick="setPreset('outlook')">Outlook</span>
+    <span class="chip" onclick="setPreset('yahoo')">Yahoo</span>
+    <span class="chip" onclick="setPreset('proton')">Proton</span>
+    <span class="chip" onclick="setPreset('icloud')">iCloud</span>
+    <span class="chip" onclick="setPreset('fastmail')">Fastmail</span>
+  </div>
+  <form id="smtp-form" method="POST" action="/auth/login/smtp">
+    <div class="row3">
+      <div class="field">
+        <label>SMTP Host</label>
+        <input name="smtp_host" id="smtp_host" type="text" placeholder="smtp.example.com" required autocomplete="off" />
+      </div>
+      <div class="field">
+        <label>Port</label>
+        <input name="smtp_port" id="smtp_port" type="number" value="587" required />
+      </div>
+      <div class="field">
+        <label>Security</label>
+        <select name="smtp_security" id="smtp_security">
+          <option value="starttls">STARTTLS</option>
+          <option value="ssl">SSL/TLS</option>
+          <option value="none">None</option>
+        </select>
+      </div>
+    </div>
+    <div class="row2">
+      <div class="field">
+        <label>Email / Username</label>
+        <input name="smtp_user" id="smtp_user" type="email" placeholder="you@example.com" required autocomplete="username" />
+      </div>
+      <div class="field">
+        <label>Password</label>
+        <input name="smtp_pass" id="smtp_pass" type="password" placeholder="••••••••" required autocomplete="current-password" />
+      </div>
+    </div>
+    <p id="preset-hint" class="hint" style="margin-bottom:12px;display:none"></p>
+    <button class="btn-smtp" type="submit" id="smtp-btn">Connect &amp; Sign In</button>
+  </form>
   ${msg ? `<p class="err">${escHtml(msg)}</p>` : ''}
+
+  ${GOOGLE_CLIENT_ID ? `
+  <div class="divider"></div>
+  <p class="section-label">Or continue with Google</p>
+  <a class="google-btn" href="/auth/login/google">
+    <svg width="18" height="18" viewBox="0 0 24 24"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>
+    Continue with Google
+  </a>` : ''}
 </div>
 <footer>a tool by midnight ecstasy</footer>
 <script src="/star-trails.js"></script>
+<script>
+  const presets = {
+    gmail:    { host:'smtp.gmail.com',         port:587,  security:'starttls', hint:'Use an <strong>App Password</strong> — not your regular Google password. <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener" style="color:#4455ff">Generate one here</a>.' },
+    outlook:  { host:'smtp.office365.com',     port:587,  security:'starttls', hint:null },
+    yahoo:    { host:'smtp.mail.yahoo.com',    port:587,  security:'starttls', hint:'Requires an <strong>App Password</strong> from your Yahoo account security settings.' },
+    proton:   { host:'127.0.0.1',              port:1025, security:'starttls', hint:'Requires <a href="https://proton.me/mail/bridge" target="_blank" rel="noopener" style="color:#4455ff">Proton Mail Bridge</a> running on this machine.' },
+    icloud:   { host:'smtp.mail.me.com',       port:587,  security:'starttls', hint:'Use an <strong>App-Specific Password</strong> from your Apple ID settings.' },
+    fastmail: { host:'smtp.fastmail.com',      port:465,  security:'ssl',      hint:null },
+  };
+  function setPreset(key) {
+    document.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
+    event.target.classList.add('active');
+    const p = presets[key];
+    document.getElementById('smtp_host').value     = p.host;
+    document.getElementById('smtp_port').value     = p.port;
+    document.getElementById('smtp_security').value = p.security;
+    const hintEl = document.getElementById('preset-hint');
+    if (p.hint) { hintEl.innerHTML = p.hint; hintEl.style.display = ''; }
+    else        { hintEl.style.display = 'none'; }
+  }
+  document.getElementById('smtp-form').addEventListener('submit', () => {
+    const btn = document.getElementById('smtp-btn');
+    btn.disabled = true; btn.textContent = 'Connecting…';
+  });
+</script>
 </body></html>`;
 
 app.get('/auth/login', (req, res) => {
   res.send(LOGIN_PAGE(req.query.error || ''));
+});
+
+app.post('/auth/login/smtp', express.urlencoded({ extended: false }), async (req, res) => {
+  const { smtp_host, smtp_port, smtp_security, smtp_user, smtp_pass } = req.body;
+  if (!smtp_host || !smtp_port || !smtp_user || !smtp_pass) {
+    return res.redirect('/auth/login?error=' + encodeURIComponent('All SMTP fields are required.'));
+  }
+  if (ALLOWED_DOMAIN_RE && !ALLOWED_DOMAIN_RE.test(smtp_user)) {
+    return res.redirect(`/auth/login?error=${encodeURIComponent(`Access restricted to @${ALLOWED_DOMAIN} accounts.`)}`);
+  }
+  const port    = parseInt(smtp_port, 10);
+  const secure  = smtp_security === 'ssl';
+  const requireTLS = smtp_security === 'starttls';
+  const transporter = nodemailer.createTransport({
+    host: smtp_host,
+    port,
+    secure,
+    requireTLS,
+    auth: { user: smtp_user, pass: smtp_pass },
+    connectionTimeout: 10_000,
+    greetingTimeout:   10_000,
+  });
+  try {
+    await transporter.verify();
+    req.session.user = { email: smtp_user, name: smtp_user };
+    req.session.smtpConfig = { host: smtp_host, port, secure, requireTLS, user: smtp_user, pass: smtp_pass };
+    log('info', 'user_login_smtp', { email: smtp_user });
+    res.redirect('/');
+  } catch (e) {
+    const msg = e.message.replace(/\s+/g, ' ').slice(0, 200);
+    log('warn', 'smtp_login_failed', { email: smtp_user, error: msg });
+    res.redirect('/auth/login?error=' + encodeURIComponent('Could not connect: ' + msg));
+  }
 });
 
 app.get('/auth/login/google', (req, res) => {
@@ -451,6 +581,19 @@ async function getGmailAccessToken(session) {
   };
   log('warn', 'gmail_token_refreshed', { email: session.user?.email });
   return data.access_token;
+}
+
+async function sendViaSmtp(smtpConfig, from, to, subject, htmlBody) {
+  const transporter = nodemailer.createTransport({
+    host:            smtpConfig.host,
+    port:            smtpConfig.port,
+    secure:          smtpConfig.secure,
+    requireTLS:      smtpConfig.requireTLS,
+    auth:            { user: smtpConfig.user, pass: smtpConfig.pass },
+    connectionTimeout: 10_000,
+    greetingTimeout:   10_000,
+  });
+  await transporter.sendMail({ from, to, subject, html: htmlBody, text: htmlBody.replace(/<[^>]*>/g, '') });
 }
 
 async function sendViaGmail(accessToken, from, to, subject, htmlBody) {
@@ -715,8 +858,10 @@ app.post('/send', async (req, res) => {
     return res.status(429).json({ error: 'Too many requests. Please wait a moment before sending again.' });
   }
 
-  if (!req.session.gmailTokens)
-    return res.status(401).json({ error: 'Gmail not authorized. Please sign out and sign in again.' });
+  const useSmtp  = !!req.session.smtpConfig;
+  const useGmail = !!req.session.gmailTokens;
+  if (!useSmtp && !useGmail)
+    return res.status(401).json({ error: 'Not authorized. Please sign in again.' });
 
   const { from_name, emails } = req.body;
   if (!emails?.length) return res.status(400).json({ error: 'No emails to send' });
@@ -735,17 +880,24 @@ app.post('/send', async (req, res) => {
   for (let i = 0; i < emails.length; i++) {
     const item = emails[i];
     try {
-      const token = await getGmailAccessToken(req.session);
-      await sendViaGmail(token, fromAddr, sanitizeMimeHeader(item.email), sanitizeMimeHeader(item.subject), item.body);
+      if (useSmtp) {
+        await sendViaSmtp(req.session.smtpConfig, fromAddr, sanitizeMimeHeader(item.email), sanitizeMimeHeader(item.subject), item.body);
+      } else {
+        const token = await getGmailAccessToken(req.session);
+        await sendViaGmail(token, fromAddr, sanitizeMimeHeader(item.email), sanitizeMimeHeader(item.subject), item.body);
+      }
       sent.push(item.email);
     } catch (e) {
-      failed.push({ email: item.email, error: redactCredentials(e.message, GOOGLE_CLIENT_SECRET) });
-      if (isFatalGmailError(e.message)) {
+      const errMsg = useSmtp
+        ? redactCredentials(e.message, req.session.smtpConfig?.pass)
+        : redactCredentials(e.message, GOOGLE_CLIENT_SECRET);
+      failed.push({ email: item.email, error: errMsg });
+      const fatal = useSmtp ? isFatalSmtpError(e.message) : isFatalGmailError(e.message);
+      if (fatal) {
         for (let j = i + 1; j < emails.length; j++)
           failed.push({ email: emails[j].email, error: 'Aborted — see previous error' });
-        const abortReason = redactCredentials(e.message, GOOGLE_CLIENT_SECRET);
-        log('error', 'send_aborted', { sender: fromEmail, sent: sent.length, failed: failed.length, reason: abortReason });
-        return res.json({ sent, failed, aborted: true, abortReason });
+        log('error', 'send_aborted', { sender: fromEmail, sent: sent.length, failed: failed.length, reason: errMsg });
+        return res.json({ sent, failed, aborted: true, abortReason: errMsg });
       }
     }
   }

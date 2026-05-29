@@ -406,3 +406,107 @@ describe('fetchWithTimeout', () => {
     assert.equal(res.status, 200);
   });
 });
+
+// ── 8. SMTP login logic ───────────────────────────────────────────────────────
+// Tests the pure logic that gates the /auth/login/smtp route:
+//   - required field validation
+//   - ALLOWED_DOMAIN enforcement
+//   - port/security mapping
+// We test these in isolation; the nodemailer.verify() call is integration-level
+// and covered by manual.md.
+
+describe('SMTP login field validation', () => {
+  function validateSmtpFields({ smtp_host, smtp_port, smtp_user, smtp_pass }) {
+    // Mirrors the guard in /auth/login/smtp
+    if (!smtp_host || !smtp_port || !smtp_user || !smtp_pass) return 'All SMTP fields are required.';
+    return null;
+  }
+
+  test('passes when all fields are present', () => {
+    assert.equal(validateSmtpFields({ smtp_host: 'smtp.example.com', smtp_port: '587', smtp_user: 'u@example.com', smtp_pass: 'secret' }), null);
+  });
+
+  test('fails when smtp_host is missing', () => {
+    assert.ok(validateSmtpFields({ smtp_host: '', smtp_port: '587', smtp_user: 'u@example.com', smtp_pass: 'secret' }));
+  });
+
+  test('fails when smtp_port is missing', () => {
+    assert.ok(validateSmtpFields({ smtp_host: 'smtp.example.com', smtp_port: '', smtp_user: 'u@example.com', smtp_pass: 'secret' }));
+  });
+
+  test('fails when smtp_user is missing', () => {
+    assert.ok(validateSmtpFields({ smtp_host: 'smtp.example.com', smtp_port: '587', smtp_user: '', smtp_pass: 'secret' }));
+  });
+
+  test('fails when smtp_pass is missing', () => {
+    assert.ok(validateSmtpFields({ smtp_host: 'smtp.example.com', smtp_port: '587', smtp_user: 'u@example.com', smtp_pass: '' }));
+  });
+});
+
+describe('SMTP login domain restriction', () => {
+  function buildDomainRE(domain) {
+    return new RegExp('@' + domain.split('.').join('\\.') + '$', 'i');
+  }
+
+  function checkDomain(allowedDomain, smtpUser) {
+    if (!allowedDomain) return null; // no restriction
+    const re = buildDomainRE(allowedDomain);
+    return re.test(smtpUser) ? null : `Access restricted to @${allowedDomain} accounts.`;
+  }
+
+  test('allows any user when ALLOWED_DOMAIN is not set', () => {
+    assert.equal(checkDomain('', 'anyone@gmail.com'), null);
+    assert.equal(checkDomain(null, 'anyone@yahoo.com'), null);
+  });
+
+  test('allows a user whose email matches ALLOWED_DOMAIN', () => {
+    assert.equal(checkDomain('midnightecstasy.com', 'label@midnightecstasy.com'), null);
+  });
+
+  test('rejects a user whose email does not match ALLOWED_DOMAIN', () => {
+    const err = checkDomain('midnightecstasy.com', 'outsider@gmail.com');
+    assert.ok(err);
+    assert.ok(err.includes('midnightecstasy.com'));
+  });
+
+  test('domain check is case-insensitive', () => {
+    assert.equal(checkDomain('midnightecstasy.com', 'label@MIDNIGHTECSTASY.COM'), null);
+  });
+});
+
+describe('SMTP security option mapping', () => {
+  function mapSecurity(smtp_security, smtp_port) {
+    // Mirrors the mapping in /auth/login/smtp
+    const port      = parseInt(smtp_port, 10);
+    const secure    = smtp_security === 'ssl';
+    const requireTLS = smtp_security === 'starttls';
+    return { port, secure, requireTLS };
+  }
+
+  test('STARTTLS maps to requireTLS=true, secure=false', () => {
+    const r = mapSecurity('starttls', '587');
+    assert.equal(r.secure, false);
+    assert.equal(r.requireTLS, true);
+    assert.equal(r.port, 587);
+  });
+
+  test('SSL maps to secure=true, requireTLS=false', () => {
+    const r = mapSecurity('ssl', '465');
+    assert.equal(r.secure, true);
+    assert.equal(r.requireTLS, false);
+    assert.equal(r.port, 465);
+  });
+
+  test('none maps to secure=false, requireTLS=false', () => {
+    const r = mapSecurity('none', '25');
+    assert.equal(r.secure, false);
+    assert.equal(r.requireTLS, false);
+    assert.equal(r.port, 25);
+  });
+
+  test('port is parsed as an integer', () => {
+    const r = mapSecurity('starttls', '587');
+    assert.equal(typeof r.port, 'number');
+    assert.equal(r.port, 587);
+  });
+});

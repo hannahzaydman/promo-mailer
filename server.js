@@ -446,7 +446,9 @@ function readSpreadsheet(buffer) {
   const sheet = wb.Sheets[wb.SheetNames[0]];
   // blankrows: true preserves blank rows so callers can warn when they're
   // skipped — blank rows in a codes file shift code-to-recipient alignment.
-  const rows  = XLSX.utils.sheet_to_json(sheet, { defval: '', blankrows: true });
+  // Filter out any null/undefined entries that some XLSX edge cases can produce.
+  const rows  = XLSX.utils.sheet_to_json(sheet, { defval: '', blankrows: true })
+    .filter(r => r != null && typeof r === 'object');
   // Strip UTF-8 BOM from column names — common in Windows/Excel CSV exports.
   // Without this, the first column is named '\uFEFFname' instead of 'name',
   // breaking auto-detection and column matching silently.

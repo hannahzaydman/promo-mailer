@@ -266,6 +266,41 @@ function readSpreadsheet(buffer) {
 }
 
 /**
+ * Like readSpreadsheet but skips leading metadata/preamble rows.
+ * Bandcamp's download-code CSV exports have ~10 rows of metadata (title, artist,
+ * label, counts, etc.) before the real header row ("Download Code", "Redeemed", …).
+ * We detect the real header as the first row with 2+ non-empty cells.
+ *
+ * @param {Buffer} buffer
+ * @returns {object[]}
+ */
+function readCodesSpreadsheet(buffer) {
+  const wb    = XLSX.read(buffer, { type: 'buffer' });
+  const sheet = wb.Sheets[wb.SheetNames[0]];
+
+  // Get all rows as raw arrays so we can scan for the real header row
+  const allRows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+  if (allRows.length === 0) return [];
+
+  // Find the first row that has 2 or more non-empty cells — that's the header.
+  // Bandcamp metadata rows each have only 1 non-empty cell.
+  let headerIdx = 0;
+  for (let i = 0; i < allRows.length; i++) {
+    const nonEmpty = allRows[i].filter(c => String(c).trim() !== '');
+    if (nonEmpty.length >= 2) { headerIdx = i; break; }
+  }
+
+  const headers  = allRows[headerIdx].map(h => String(h).replace(/^\uFEFF/, '').trim());
+  const dataRows = allRows.slice(headerIdx + 1);
+
+  return dataRows.map(row => {
+    const obj = {};
+    headers.forEach((h, i) => { obj[h] = row[i] ?? ''; });
+    return obj;
+  }).filter(r => r != null && typeof r === 'object');
+}
+
+/**
  * Compute a short HMAC token for use in unsubscribe links.
  * Scoped to a specific sender+recipient pair so tokens can't be reused
  * across senders or recipients.
@@ -335,5 +370,5 @@ module.exports = {
   isFatalSmtpError, isFatalGmailError,
   validateColumns, validateInputLengths, redactCredentials,
   RateLimiter,
-  readSpreadsheet, unsubToken, createSmtpCrypto, fetchWithTimeout,
+  readSpreadsheet, readCodesSpreadsheet, unsubToken, createSmtpCrypto, fetchWithTimeout,
 };

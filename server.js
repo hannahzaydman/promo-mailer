@@ -11,7 +11,7 @@ const https      = require('https');
 const {
   escHtml, sanitizeMimeHeader, applyTemplate, parseRecipientList, partitionCodes,
   isFatalSmtpError, isFatalGmailError, validateColumns, RateLimiter,
-  validateInputLengths, redactCredentials, readSpreadsheet, unsubToken,
+  validateInputLengths, redactCredentials, readSpreadsheet, readCodesSpreadsheet, unsubToken,
   createSmtpCrypto, fetchWithTimeout,
 } = require('./utils');
 
@@ -603,7 +603,10 @@ function createApp({ db, sessionStore, config }) {
   app.post('/get-columns', upload.single('recipient_file'), (req, res) => {
     try {
       if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-      const rows = readSpreadsheet(req.file.buffer);
+      const isCodes = req.query.type === 'codes';
+      const rows = isCodes
+        ? readCodesSpreadsheet(req.file.buffer)
+        : readSpreadsheet(req.file.buffer);
       if (!rows.length) return res.json({ error: 'File appears to be empty' });
       const columns = Object.keys(rows[0]);
       const PREVIEW_ROWS = 8;
@@ -711,7 +714,7 @@ function createApp({ db, sessionStore, config }) {
         });
         if (previewLenErr) return res.status(400).json({ error: previewLenErr });
 
-        const rawCodeRows  = readSpreadsheet(codesFile.buffer);
+        const rawCodeRows  = readCodesSpreadsheet(codesFile.buffer);
         const codesColErr  = validateColumns(rawCodeRows, [codesCol], name);
         if (codesColErr) return res.status(400).json({ error: codesColErr });
 

@@ -3,7 +3,33 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Promo Mailer</title>
+  <title>djpromo.net — DJ Promo Mailer for Record Labels</title>
+  <meta name="description" content="Send Bandcamp download codes to DJs in bulk. Upload your recipient list, attach releases, and deliver personalized promo emails in minutes." />
+  <link rel="canonical" href="https://djpromo.net/" />
+
+  <!-- Open Graph -->
+  <meta property="og:title" content="djpromo.net — DJ Promo Mailer for Record Labels" />
+  <meta property="og:description" content="Send Bandcamp download codes to DJs in bulk. Built for record labels." />
+  <meta property="og:url" content="https://djpromo.net/" />
+  <meta property="og:type" content="website" />
+  <!-- Twitter Card -->
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:title" content="djpromo.net — DJ Promo Mailer for Record Labels" />
+  <meta name="twitter:description" content="Send Bandcamp download codes to DJs in bulk. Built for record labels." />
+
+  <!-- Structured data -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "djpromo.net",
+    "applicationCategory": "BusinessApplication",
+    "description": "DJ promo mailer for record labels — send Bandcamp download codes to DJs in bulk",
+    "url": "https://djpromo.net",
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+  }
+  </script>
+
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -1396,7 +1422,7 @@
       editor.focus();
       const sel = window.getSelection();
       const selectedText = sel && !sel.isCollapsed ? sel.toString() : '';
-      savedRange = sel && !sel.isCollapsed ? sel.getRangeAt(0).cloneRange() : null;
+      savedRange = sel && sel.rangeCount > 0 ? sel.getRangeAt(0).cloneRange() : null;
       textInput.value = selectedText;
       urlInput.value  = '';
       popover.style.display = 'block';
@@ -1432,16 +1458,6 @@
       if (e.key === 'Escape') { e.preventDefault(); cancelBtn.click(); }
     });
 
-    const bcLinkBtn = toolbar.querySelector('.bc-link-btn');
-    if (bcLinkBtn) {
-      bcLinkBtn.addEventListener('click', () => {
-        const editor = document.getElementById(`body-${id}`);
-        if (!editor) return;
-        editor.focus();
-        document.execCommand('insertHTML', false,
-          '<a href="https://bandcamp.com/yum?n={code}" target="_blank" rel="noopener noreferrer">Redeem your download code</a>');
-      });
-    }
   }
 
   // Update toolbar active states on selection change
@@ -1601,8 +1617,6 @@
               <button type="button" class="tool-btn link-btn" data-id="${id}" title="Insert link">
                 <svg viewBox="0 0 16 16" fill="none" width="14" height="14" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="display:block"><path d="M6.5 9.5a3.5 3.5 0 0 0 4.95 0l2-2a3.5 3.5 0 0 0-4.95-4.95l-1.25 1.25"/><path d="M9.5 6.5a3.5 3.5 0 0 0-4.95 0l-2 2a3.5 3.5 0 0 0 4.95 4.95l1.25-1.25"/></svg>
               </button>
-              <div class="toolbar-sep"></div>
-              <button type="button" class="tool-btn bc-link-btn" data-id="${id}" title="Insert Bandcamp redemption link" style="font-size:0.65rem;font-weight:700;letter-spacing:.02em;padding:0 6px">BC</button>
             </div>
             <div class="rich-body" id="body-${id}" contenteditable="true" spellcheck="true"
               data-placeholder="Hi {name}, here's your download code: {code}"></div>
@@ -1661,7 +1675,7 @@
     const fd = new FormData();
     fd.append('recipient_file', file);
     try {
-      const res = await fetch('/get-columns', { method: 'POST', body: fd });
+      const res = await fetch('/get-columns?type=codes', { method: 'POST', body: fd });
       const data = await res.json();
       if (data.error) return;
       populateSelect(`codes-col-${id}`, data.columns, autoGuess(data.columns, ['code','download','redemption','bandcamp']));

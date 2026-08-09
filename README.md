@@ -106,7 +106,7 @@ Visit `https://djpromo.net` and sign in with either:
 - **SMTP** — enter your mail server settings directly (Gmail, Outlook, Yahoo, Proton, iCloud, Fastmail presets available)
 - **Google OAuth** — click "Continue with Google" (any Google account)
 
-Sessions last 8 hours.
+Sessions last 8 hours. After expiry, API calls silently fail — the app will show "Your session has expired. Please sign out and sign in again." Two improvements are deferred: (1) rolling sessions (`rolling: true` in session config) so any activity resets the 8-hour clock, and (2) an in-page "session expired" modal that prompts re-auth without losing the user's current work.
 
 ### Logging in (local dev)
 No login required locally — the app opens directly unless `GOOGLE_CLIENT_ID` is set as an env var.

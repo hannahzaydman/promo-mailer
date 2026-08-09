@@ -1315,7 +1315,13 @@
     fd.append('recipient_file', djFile);
     try {
       const res = await fetch('/get-columns', { method: 'POST', body: fd });
-      const data = await res.json();
+      if (res.status === 401 || res.redirected) {
+        showError('step1-error', 'Your session has expired. Please sign out and sign in again.');
+        return;
+      }
+      let data;
+      try { data = await res.json(); }
+      catch { showError('step1-error', 'Server returned an unexpected response. Try signing out and back in.'); return; }
       if (data.error) { showError('step1-error', data.error); return; }
       populateNameColSelect(data.columns);
       populateSelect('email-col', data.columns, autoGuess(data.columns, ['email','e-mail','mail']));
@@ -1326,7 +1332,7 @@
         renderRecipientPreview(data.preview, data.total ?? data.preview.length);
       }
       showToast(`${djFile.name} loaded — ${data.total ?? data.preview?.length ?? '?'} recipients`, 'success');
-    } catch(e) { showError('step1-error', 'Could not read file.'); }
+    } catch(e) { showError('step1-error', 'Upload failed: ' + e.message); }
   });
 
   // ── Manual recipient entry ────────────────────────────────────────────────
